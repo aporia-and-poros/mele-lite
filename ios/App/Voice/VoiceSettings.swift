@@ -89,7 +89,8 @@ struct VoiceSettingsSection: View {
                 chosenRow
             }
             // 打电话时 TA 用哪种声音（10-31）：快 = 低延迟那档；有表情 = 语音条那个模型；iPhone 自带 = 免费、不用 key（明着选的，不是失败时偷换）
-            if Lite.local {
+            // 11-03：连 Host 也给（第 3 步 Host 能打电话以后这里还只认本机，连 Host 的人选不到）
+            if Lite.on {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("电话里的声音").font(Typo.sans(Typo.Size.callout)).foregroundStyle(theme.inkDim)
                     Picker("电话里的声音", selection: store.s("call_voice", "fast")) {
@@ -167,9 +168,11 @@ struct VoiceSettingsSection: View {
 
     private var callVoiceNote: String {
         switch store.settings["call_voice"] as? String ?? "fast" {
-        case "expressive": String(localized: "跟语音条同一个模型，语气更丰富，开口慢一点。走你的 ElevenLabs key。")
+        case "expressive": Lite.hosted ? String(localized: "跟语音条同一个模型，语气更丰富，开口慢一点。走 Host 上的 ElevenLabs key。")
+                                       : String(localized: "跟语音条同一个模型，语气更丰富，开口慢一点。走你的 ElevenLabs key。")
         case "system": String(localized: "iPhone 自带的声音，免费、不用 ElevenLabs key，听起来是机器念的。")
-        default: String(localized: "开口最快的那档，走你的 ElevenLabs key。")
+        default: Lite.hosted ? String(localized: "开口最快的那档，走 Host 上的 ElevenLabs key。")
+                             : String(localized: "开口最快的那档，走你的 ElevenLabs key。")
         }
     }
 
