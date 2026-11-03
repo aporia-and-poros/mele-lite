@@ -40,7 +40,7 @@ struct CallView: View {
             backdrop
             VStack(spacing: 0) {
                 topBar
-                if captionsOn {
+                if showCaptions {
                     compactHeader
                     captionList
                 } else {
@@ -51,13 +51,14 @@ struct CallView: View {
                 if let n = call.notice {
                     Text(n)
                         .font(Typo.sans(Typo.Size.callout))
+                        .fixedSize(horizontal: false, vertical: true)
                         .foregroundStyle(.white.opacity(0.85))
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 16).padding(.vertical, 8)
                         .background(Capsule().fill(.white.opacity(0.12)))
                         .padding(.horizontal, 24).padding(.bottom, 14)
                 }
-                if !captionsOn && call.phase == .live {
+                if !showCaptions && call.phase == .live {
                     Text(CallSpeech.clock(call.seconds))
                         .font(.system(size: 17, weight: .regular).monospacedDigit())
                         .foregroundStyle(.white.opacity(0.9))
@@ -96,21 +97,25 @@ struct CallView: View {
                 Color.clear.overlay { Image(uiImage: custom).resizable().scaledToFill() }.clipped()
                 LinearGradient(colors: [.black.opacity(0.45), .black.opacity(0.1), .black.opacity(0.55)], startPoint: .top, endPoint: .bottom)
             } else if let avatar {
-                Image(uiImage: avatar)
-                    .resizable().scaledToFill()
-                    .blur(radius: 60)
-                    .opacity(0.55)
+                // 11-03 内测截图：图没框住，scaledToFill 把整页撑得比屏幕宽，··· 和麦克风 / 扬声器两个键被挤出屏幕。跟上面一样框在屏幕里
+                Color.clear.overlay {
+                    Image(uiImage: avatar).resizable().scaledToFill().blur(radius: 60).opacity(0.55)
+                }
+                .clipped()
             }
             if custom == nil { Color.black.opacity(0.35) }
         }
         .ignoresSafeArea()
     }
 
+    /// 字幕：自己开的，或者这通没有声音可放（textOnly）
+    private var showCaptions: Bool { captionsOn || call.textOnly }
+
     private var topBar: some View {
         HStack {
             Spacer()
             Menu {
-                Toggle(isOn: $captionsOn) { Label("字幕", systemImage: "captions.bubble") }
+                if !call.textOnly { Toggle(isOn: $captionsOn) { Label("字幕", systemImage: "captions.bubble") } }
                 Picker(selection: $endpoint) {
                     Text("快（停 0.7 秒）").tag("fast")
                     Text("中（停 1 秒）").tag("mid")

@@ -31,6 +31,8 @@ final class CallSession: ObservableObject {
     }
     @Published private(set) var captions: [Caption] = []
     @Published private(set) var notice: String?
+    /// 这通没有声音可放（没填 ElevenLabs key、又没选 iPhone 自带）：通话页自己把字幕打开（11-03 内测：字幕默认关，TA 的话哪都看不到）
+    @Published private(set) var textOnly = false
     /// 上一句各段花了多久（「···」里看，第 2 步的计时）
     @Published private(set) var lastTiming: String?
     /// TA 的声音多响（0～1，起得快落得慢，像呼吸）
@@ -141,6 +143,7 @@ final class CallSession: ObservableObject {
         }
         if voiceKind == .system { system.warmUp(zh: zh) }
         if voiceKind != .system && !backend.canSpeak {
+            textOnly = true
             notice = Lite.hosted ? String(localized: "Host 上还没有 ElevenLabs key，TA 的话只出字幕。想听声音：TA 的设定 → 声音 → 电话里的声音，选「iPhone 自带」")
                                  : String(localized: "还没填 ElevenLabs key，TA 的话只出字幕。想听声音：TA 的设定 → 声音 → 电话里的声音，选「iPhone 自带」")
         }
