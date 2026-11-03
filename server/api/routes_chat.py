@@ -119,7 +119,11 @@ async def events(conv: UUID, request: Request, acc: UUID = Depends(account), a: 
 def _msg(m: archive.StoredMsg) -> dict:
     return {"id": m.id, "role": m.role, "text": m.text, "thinking": m.thinking, "thinking_ms": m.thinking_ms,
             "inner_voice": m.inner_voice, "at": m.created_at.isoformat(),
-            "speaker": str(m.speaker) if m.speaker else None, "speaker_name": m.speaker_name or None}
+            "speaker": str(m.speaker) if m.speaker else None, "speaker_name": m.speaker_name or None,
+            # 电话（10-31）：电话里说的不出气泡；挂断那条画成一行「📞 通话时长」，点开看这通
+            "call": bool(m.call) and not (m.call or {}).get("end") and not (m.call or {}).get("ring"),
+            "call_end": bool((m.call or {}).get("end")), "call_id": (m.call or {}).get("id"),
+            "ring": (m.call or {}).get("ring")}           # TA 打来没接通（第 4 步）：missed / declined / withdrawn
 
 
 @router.get("/conversations/{conv}/messages")
@@ -147,6 +151,8 @@ async def messages(conv: UUID, after: int = 0, before: int | None = None, day: s
     by_speaker = {sp: await _settings_of(a, scope, sp) for sp in {m.speaker for m in shown}}   # 群里每个 TA 按自己的设定切
 
     def bubbles(m: archive.StoredMsg) -> list[str]:       # 跟事件流里推的一样切；TA 连发的几句还原成几个
+        if m.call:                                         # 电话里的（10-31）：聊天里只留「📞 通话时长」那一行
+            return []
         if m.role == "assistant":
             settings = by_speaker[m.speaker]
             return split_reply(m.text, settings.max_bubbles, settings.long_mode)
@@ -155,23 +161,27 @@ async def messages(conv: UUID, after: int = 0, before: int | None = None, day: s
     files = await attachments.for_messages(a.deps.pool, [m.id for m in shown])
     clips = {m.id: await voice.clips_for_message(a.deps.pool, scope.account, m.id)
              for m in shown if m.role == "assistant" and voice.MARK in m.text}
+    speakable = bool(clips) and await voice.can_speak(a.deps, scope.account)
 
-    def with_voice(m: archive.StoredMsg) -> tuple[list[str], list]:
-        """语音条（10-03）：气泡里给逐字稿，并排一列 voices（null = 文字），App 老版本照样读 bubbles。"""
+    def with_voice(m: archive.StoredMsg) -> tuple[list[str], list, list]:
+        """语音条（10-03）：气泡里给逐字稿，并排一列 voices（null = 文字），App 老版本照样读 bubbles。
+        还没念的（10-31 按需念）并排一列 lazy_voices：App 画成语音条、点了才念；老 App 不认这列，看到的是文字。"""
         bs = bubbles(m)
         if m.id not in clips:
-            return bs, [None] * len(bs)
-        texts, vs = [], []
+            return bs, [None] * len(bs), [None] * len(bs)
+        texts, vs, lz = [], [], []
         for b in bs:
             c = clips[m.id].get(voice.text_sha(voice.body(b))) if voice.is_voice(b) else None
             texts.append(voice.strip_tags(voice.body(b)) if voice.is_voice(b) else b)
             vs.append(c.public() if c else None)
-        return texts, vs
+            lz.append(voice.lazy_public(b) if voice.is_voice(b) and c is None and speakable else None)
+        return texts, vs, lz
     shaped = {m.id: with_voice(m) for m in shown}
     def divider(m: archive.StoredMsg) -> str | None:      # 搬来的那几段：每段第一条挂的灰字行（brain/chat_import.py）
         return next((c.get("text") for c in m.cards or [] if c.get("kind") == "divider"), None)
-    out = {"messages": [{**_msg(m), "bubbles": shaped[m.id][0], "voices": shaped[m.id][1],
-                         "cards": [c for c in m.cards or [] if c.get("kind") != "divider"], "divider": divider(m),
+    out = {"messages": [{**_msg(m), "bubbles": shaped[m.id][0], "voices": shaped[m.id][1], "lazy_voices": shaped[m.id][2],
+                         "cards": [] if m.call else [c for c in m.cards or [] if c.get("kind") != "divider"],
+                         "divider": (m.call or {}).get("line") or divider(m),
                          "reaction": (marks.get(m.id) or {}).get(-1) or next(iter((marks.get(m.id) or {}).values()), None),
                          "reactions": reactions.per_bubble(marks.get(m.id) or {}, len(shaped[m.id][0])),
                          "attachments": [f.public() for f in files.get(m.id, [])],

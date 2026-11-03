@@ -71,6 +71,8 @@ class GeminiAdapter:
                             calls.append(ToolCall(fc.id or f"call_{len(calls)}", fc.name, dict(fc.args or {})))
                         elif p.text:
                             (thinking if p.thought else text).append(p.text)
+                            if req.on_text and not p.thought:
+                                req.on_text(p.text)
         except gerrors.APIError as e:
             raise from_status(e.code or 0, e.message or "") from e
         except httpx.TransportError as e:

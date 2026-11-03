@@ -29,6 +29,7 @@ Mele 是我从零开始写的。一路上，很多想法来自大家无私公开
 | 世界书 | Kelivo |
 | 导入角色卡 | Character Card V2 / V3 公开规范（SillyTavern 社区） |
 | 语音条的音频标签写法 | sanqianzilanyue / ai-voice-breath-kiss-water |
+| 语音通话：灰字先出、说完变实，一句一合成，一开口打断 TA | Ariakitty（Aria & Claude）/ ai-voice-call、ai-native-call |
 | 起床前准备、分轻重的推送 | Instinct 创始人访谈 |
 | 思考风格的开头 | 一段网上流传的英文提示词（原出处未知），已改写 |
 
@@ -87,6 +88,7 @@ Xiaohongshu (RED): Mele (94587369760) · GitHub: aporia-and-poros
 | Lorebook | Kelivo |
 | Character card import | Character Card V2 / V3 open spec (SillyTavern community) |
 | Audio tags for voice notes | sanqianzilanyue / ai-voice-breath-kiss-water |
+| Voice calls: grey live captions that settle when you finish, one line synthesized at a time, talking over them to interrupt | Ariakitty (Aria & Claude) / ai-voice-call, ai-native-call |
 | Morning prep, priority-based notifications | An interview with the founder of Instinct |
 | Opening of the thinking style | An English prompt circulating online (original source unknown), rewritten |
 

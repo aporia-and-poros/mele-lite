@@ -27,6 +27,7 @@ from llm.errors import LLMError, context_full
 from llm.router import Route, call, make_adapter
 from llm.types import ChatRequest, ImagePart, Msg, ToolCall, ToolRound, Usage
 
+from . import markers, stickers as ST
 from . import archive, attachments as files, books, context_line, diary, drawer, far_dates, focus, hidden, ledger, lore, mcp, media, probe as sentinel, reactions, tarot, vision, voice, wallet
 from .judge import LLMJudge
 from .bubbles import split_reply, typing_delay
@@ -34,6 +35,8 @@ from . import chores, repeats
 from . import moments as MO
 from .context import ContextParts, build_request, render_volatile, user_tag
 from . import inner_voice, monologue
+from . import call_speech
+from .call_speech import CallCtx, CallCut
 from . import bilingual, group as G, groups, model_noise, timeline
 from .inject import TEXTS, TurnFacts, reminder_lines, split_thinking, thinking_style
 from .scope import Scope
@@ -45,8 +48,8 @@ from music import ears
 
 from .auth import TrialOver, charge_trial
 from .edits import EditRef
-from .tools import INCOGNITO_TOOLS, ToolContext, run_tool, tool_note, tool_specs
-from .wake_text import monologue_note, split_silent
+from .tools import INCOGNITO_TOOLS, ToolContext, act_on_markers, run_tool, tool_note, tool_specs
+from .wake_text import SILENT_DID, monologue_note, silent_note, split_silent
 
 log = logging.getLogger(__name__)
 
@@ -107,6 +110,7 @@ class Deps:
     tts_for: Callable[[str], object] | None = None   # 声音（10-03）：给一把 ElevenLabs key 返回接头；None = 没有声音
     tts_key: str = ""            # 我们的 ElevenLabs key（NEWAPP_ELEVENLABS_KEY）；空 = 只有自带 key 的人能用
     files_dir: Path | None = None   # 语音存哪（接口启动时填 ApiConfig.files_dir）
+    ringer: object = None        # TA 打给你（10-31，brain/call_ring.Ringer）：接口启动时填；None = 没有打电话工具
 
 
 GAP_MIN = 30          # 隔了多少分钟才提
@@ -153,7 +157,8 @@ class LoopResult:
 
 
 async def tool_loop(adapter, req: ChatRequest, ctx: ToolContext, emit: Emit, lang: str,
-                    max_rounds: int = TOOL_ROUNDS_MAX, untagged: str = "", retag: bool = False) -> LoopResult:
+                    max_rounds: int = TOOL_ROUNDS_MAX, untagged: str = "", retag: bool = False,
+                    phone: CallCtx | None = None) -> LoopResult:
     """调模型；它要调工具就执行、把结果还给它、接着调。看的是回复里有没有工具请求，不看它自报的停下原因。
     最多 max_rounds 个来回：最后一个来回的结果里告诉它「次数用完了」，再调一次就收尾。"""
     total = Usage()
@@ -168,6 +173,8 @@ async def tool_loop(adapter, req: ChatRequest, ctx: ToolContext, emit: Emit, lan
     for round_no in range(max_rounds + 1):
         reply = await call(adapter, req)
         total = total + reply.usage
+        if phone is not None:
+            phone.flush()                    # 电话：调工具前那句「等我查一下」先念出来（10-31）
         tagged = tagged or monologue.has_tag(reply.text)
         if (retag and untagged and not reply.tool_calls and not tagged and not retagged and round_no < max_rounds):
             # 10-26 Aporia：没打标记就得猜哪段是心里话，猜错了要么漏进气泡、要么把正文吞进思考。设置里开了就不猜，
@@ -229,6 +236,9 @@ async def tool_loop(adapter, req: ChatRequest, ctx: ToolContext, emit: Emit, lan
                             **({"data": card.data} if card.data else {})})
                 if card.kind == "relationship":       # 卡不挂，但手机要知道：名字旁边的图标换一下（09-29）
                     await emit({"type": "relationship", "to": (card.data or {}).get("to", "")})
+        if ctx.end_turn:                         # 打了电话、在响（10-31）：这一轮到此为止，等 TA 接
+            return LoopResult(said, "\n\n".join(thinking), total, used, reply.usage.prompt_total or req.estimated_prompt(),
+                              notes, cards)
         if round_no == max_rounds - 1:
             results = [r + LAST_ROUND_NOTE[lang] for r in results]
         req.rounds.append(ToolRound(reply.raw_assistant, list(reply.tool_calls), results))
@@ -257,15 +267,35 @@ def history_msgs(stored: list[archive.StoredMsg], lang: str) -> tuple[list[Msg],
     for m in stored:
         if m.role in archive.USER_SIDE:
             # 双语气泡（10-15）：你那句翻好了就给它看翻好的那版
-            out.append(Msg("user", with_tools_note(pending, bilingual.user_side(m.text, m.translations))))
+            said = bilingual.user_side(m.text, m.translations)
+            if m.call and not m.call.get("end") and not m.call.get("ring"):   # 电话里说的（10-31）；挂断、未接那条正文就是纸条
+                said = call_speech.tag(lang) + said
+            text = with_tools_note(pending, said)
+            if out and out[-1].role == "user" and _silent_did(out[-1].text):   # 醒来没说话留的那条后面接着的：并成一段
+                out[-1] = replace(out[-1], text=f"{out[-1].text}\n\n{text}")
+            else:
+                out.append(Msg("user", text))
             pending = ""
         else:
             text = model_noise.unsilence(m.text)
             if m.inner_voice:                 # 心声（10-11）：它记得当时心里想什么，但分得清那不是说出口的
                 text = f"{text}\n\n{inner_voice.context_line(m.inner_voice, lang)}"
+            if m.call and m.call.get("cut"):  # 电话里念到一半被打断（10-31）
+                text = f"{text}\n{call_speech.cut_note(lang)}"
             out.append(Msg("assistant", text))
             pending = TOOLS_HEAD[lang].format(sep.join(m.tools.splitlines())) if m.tools.strip() else ""
     return out, pending
+
+
+def fold_tail(hist: list[Msg], text: str) -> tuple[list[Msg], str]:
+    """历史最后一条是用户那侧的：拿下来接在这一轮的话前面（10-30：醒来没说话、做了自己的事留的那条）。"""
+    if hist and hist[-1].role == "user" and not hist[-1].images and _silent_did(hist[-1].text):
+        return hist[:-1], f"{hist[-1].text}\n\n{text}" if text else hist[-1].text
+    return hist, text
+
+
+def _silent_did(text: str) -> bool:
+    return any(head in text for head in SILENT_DID.values())
 
 
 def with_tools_note(note: str, text: str) -> str:
@@ -397,14 +427,15 @@ def squash(msgs: list[Msg]) -> list[Msg]:
 async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, resend: bool = False,
                    wake: str | None = None, attachments: list | None = None,
                    pieces: list[str] | None = None, free_trial: bool = False, quiet_food: bool = False,
-                   group: GroupCtx | None = None) -> TurnOutcome:
+                   group: GroupCtx | None = None, call: CallCtx | None = None, aside: str | None = None) -> TurnOutcome:
     """scope = 这一轮在谁的名下（brain/scope.py）：设置、人设、记忆归联系人，聊天、账本、状态归窗口，用量归账号。
     resend = 重新生成：用户那句已经在存档最后了（刚撤掉了它的回复），不再存一遍，直接再回一次。
     wake = 它自己醒来（巡逻）：这段〔醒来〕代替用户的话。它想事时的动静先压着，回 <silent> 就全丢、什么都不存；
     开口了才把压着的放出去，〔醒来〕存成 wake 角色、回复照常存。醒来时出错不推给用户，交给巡逻记账。
     pieces = 等候区拼成 text 之前的那几句，跟着存下来，app 按它还原成几个气泡。
     free_trial = 这一轮不扣免费额度（初见那一轮，09-28）。
-    quiet_food = 这一轮不给〔饮食〕那行（记一餐说一句，09-30：不让它看见热量；那几条留到下一轮再告诉它）。"""
+    quiet_food = 这一轮不给〔饮食〕那行（记一餐说一句，09-30：不让它看见热量；那几条留到下一轮再告诉它）。
+    aside = 递给它的一句旁白、不存成用户说的话（10-31：TA 打来的电话接通了，它先开口）。"""
     scope = Scope.of(scope)
     acc, comp, conv = scope.account, scope.companion, scope.conversation
     real_emit, held = emit, []
@@ -414,6 +445,10 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
     pool = deps.pool
     now = deps.now()
     settings = Settings.from_dict(await archive.get_settings(pool, comp))
+    if call is not None:         # 电话（10-31）：不想事、不写长文 / 心声 / 双语 / 语音条，开口要快
+        settings = replace(settings, thinking=False, long_mode=False, inner_voice=False, bilingual=False, voice_mode="off")
+    if settings.bare_mode and not settings.thinking_style_text.strip():   # 本体化（11-03 Aporia）：我们的思考风格不贴；用户自己写的照贴
+        settings = replace(settings, sentinels={**settings.sentinels, "thinking_style": False})
     if scope.incognito:          # 无痕：它不知道对面是 TA——连名字、怎么指代都不给（Aporia 09-27 定）
         settings = replace(settings, user_name="", user_pronoun="they")
     lang = settings.lang
@@ -437,16 +472,24 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
         text = next((m.text for m in reversed(history) if m.role == "user"), "")   # 联想拿 TA 最后说的那句当线索
     elif group is not None:          # 群：你那句调度那层已经存了；text = 它上一句以后大家说的（联想用）
         said = None
+    elif aside is not None:          # 旁白（10-31）：只递给它，不存；联想拿 TA 最后说的那句当线索
+        said = None
+        text_for_model = aside
+        text = next((m.text for m in reversed(history) if m.role == "user"), "")
     elif resend:
         if not history or history[-1].role != "user":
             raise ValueError("没有可以重新回的那句")
         said, history = history[-1], history[:-1]
         text = text_for_model = said.text
     else:
-        said = await archive.add_message(pool, conv, "user", text, parts=pieces, now=now)
+        said = await archive.add_message(pool, conv, "user", text, parts=pieces, now=now,
+                                         call={"id": call.id} if call is not None else None)
         sent = await files.claim(pool, conv, attachments, said.id) if attachments else []
         # 双语气泡不翻你那句（10-15 内测：用户不要），原话照发，TA 照样用它那种语言回
         text_for_model = "\n".join([text, *(files.note(f, lang) for f in sent)]).strip()
+        if call is not None:
+            call.user_msg = said.id
+            text_for_model = call_speech.tag(lang) + text_for_model
     # 隔了很久才发的这一句（10-20 内测：两小时没说话，再开口 TA 还接着两小时前的话头）：tail 里告诉它过了多久
     gap_line = gap_note(now - history[-1].created_at, now, settings.tz, lang) if said is not None and history else ""
     edit_ref = None if scope.incognito or said is None else EditRef(conv, said.id)   # 倒回时按这一轮撤回它写过的东西
@@ -532,13 +575,15 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
                            deps.rng, no_draft=bool(chat_info and chat_info.drafts_in_thinking), mode=mode,
                            english=english, character=character)
     mono_rules = (monologue.rules(settings, settings.thinking_style_text.strip()
-                                  or thinking_style(settings, character=character))
+                                  or ("" if settings.bare_mode else thinking_style(settings, character=character)))
                   if mode == "monologue" else "")
     # 旧版本漏进正文的心里话（10-19）：回看历史前洗掉，不让 TA 照着自己漏过的样子学
     history = [replace(m, text=monologue.spoken_only(m.text, untagged, lang == "zh"))
                if m.role == "assistant" and group is None else m for m in history]
     hist, tools_note = history_msgs(history, lang)
     user_text_now = with_tools_note(tools_note, wake or text_for_model)
+    if group is None:                # 历史末尾已经是用户那侧（醒来没说话留的那条）：跟这一轮并成一段，不连着两条
+        hist, user_text_now = fold_tail(hist, user_text_now)
     if group is not None:            # 群：最后那几句（你和别的 TA 说的）就是这一轮要接的话；末尾是它自己的就提醒轮到它
         tail_user: list[str] = []
         while hist and hist[-1].role == "user":
@@ -551,7 +596,13 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
     if focus_note:                   # 哨兵：刚结束的专注，这一轮告诉它一次
         before = [*before, focus_note]
     lore_all = [] if scope.incognito else await _safe(lore.list_for(pool, acc, comp), [])
+    sticker_lib: list = []                             # 表情包（10-31）：它写 [表情包：#12] 发，这张表壹层里给；无痕、群里不给
     if not scope.incognito and group is None:          # 标记表情：TA 给它哪句点了什么，这一轮告诉它一次（群里第一步都不递）
+        sticker_lib = await _safe(ST.for_companion(pool, acc, comp), [])
+        if call is None:             # 库大：按刚聊的两句挑几张最搭的，带完整描述（电话里不发表情包）
+            fits = ST.picks_block(await _safe(ST.picks(pool, deps.embedder, sticker_lib, [last_assistant, wake or text]), []), lang)
+            if fits:
+                before = [*before, fits]
         before = [*before, *await _safe(reactions.pending_lines(pool, conv, lang), [])]
         near = "\n".join(await _safe(far_dates.open_lines(pool, comp, now, settings.tz, lang), []))
         if now_and_then(state, "dates", near, now, wake=bool(wake)):      # 快到的远事：不每轮都给（09-30）
@@ -598,22 +649,28 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
     outside = mcp.Toolbox()                      # 用户自己接的 MCP 服务（10-05，Host）：无痕不给；连不上的这一轮跳过
     if not scope.incognito and group is None and settings.mcp_servers:
         outside = await _safe(mcp.toolbox(pool, getattr(deps.keys, "box", None), acc, settings.mcp_servers), mcp.Toolbox())
+    phone_on = (call is None and group is None and not scope.incognito and deps.ringer is not None   # 打电话（10-31）
+                and await _safe(deps.ringer.can_ring(acc), False))
     draw_on = (not scope.incognito and group is None and deps.files_dir is not None   # 挑了画图钥匙才给 draw（10-15）
                and await _safe(media.image_route(pool, getattr(deps.keys, "box", None), acc), None) is not None)
     if not draw_on and group is None and not wake and not scope.incognito and chores.wants_drawing(text):
         await emit({"type": "notice", "text": DRAW_NOTICE[lang]})    # 叫 TA 画、还没挑画图钥匙：提醒去哪挑（10-16）
+    room_text = ("\n\n" + timeline.room_note(timeline.group_room(group.name, lang == "zh") if group is not None
+                                               else timeline.private_room(lang == "zh"), lang)) if merged_rooms else ""
     parts = ContextParts(
         tools=[t for t in tool_specs() if t.name in GROUP_TOOLS] if group is not None
-        else tool_specs(incognito=scope.incognito, extra=("draw",) if draw_on else ()) + outside.specs,
+        else tool_specs(incognito=scope.incognito, extra=(("draw",) if draw_on else ()) + (("phone_call",) if phone_on else ()))
+        + outside.specs,
         base=(G.room_rules(zh=lang == "zh", group=group.name, me=persona.name or "TA", user_name=ulabel,
                            others=list(group.others)) + "\n\n" if group is not None else "") + render_base(persona, core, lang,
                          monologue="\n\n".join(x for x in (mono_rules, inner_voice.rules(settings) if settings.inner_voice else "") if x),
-                         tone=tone_lines(lang, settings.warmth, settings.initiative, settings.humor)
+                         tone=([] if settings.bare_mode else tone_lines(lang, settings.warmth, settings.initiative, settings.humor))
                          + ([] if scope.incognito else voice.mode_lines(lang, settings.voice_mode)),
-                         relationship=settings.relationship, lore=lore.always_block(lore_all, lang),
+                         relationship=settings.relationship,
+                         lore="\n\n".join(x for x in (lore.always_block(lore_all, lang), ST.menu_block(sticker_lib, lang)) if x),
                          chat_rules=not settings.long_mode,
                          life=settings.offline_life or settings.long_mode,   # 线下生活关着：没有出门吃饭那两行（10-05）
-                         talk=settings.talk_rules),                         # 用户自己写的说话规矩（10-05）     # 长文模式：拿掉「说话」那一节（10-01 Aporia）
+                         talk=settings.talk_rules, bare=settings.bare_mode) + room_text,             # 用户自己写的说话规矩（10-05）；合了别的房间就说一声在哪（10-31）     # 长文模式：拿掉「说话」那一节（10-01 Aporia）
         ledger=ledger.render_group_ledger(await archive.get_ledger(pool, conv), lang, persona.name or "TA")
         if group is not None else ledger.render_ledger(await archive.get_ledger(pool, conv), monologue.clean_samples(state.get("voice_samples", []), untagged, lang == "zh"), lang,
                                                          settings.user_name),
@@ -623,12 +680,18 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
         # 人设锚（10-01 Aporia：怕脱离人设）：离最新对话最近的一行，每轮十几个字
         tail="\n".join([*thinking_lines, *([inner_voice.hook(settings)] if settings.inner_voice else []),
                          *([bilingual.rule(settings)] if bilingual.active(settings, group) else []),
-                         *([gap_line] if gap_line else []), TEXTS[lang]["anchor"].format(name=persona.name or "Lumi")
-                         + ("" if settings.long_mode or settings.talk_rules.strip() else TEXTS[lang]["short"])]),
+                         *([gap_line] if gap_line else []),
+                         *([] if settings.bare_mode else [TEXTS[lang]["anchor"].format(name=persona.name or "Lumi")
+                                                           + ("" if settings.long_mode or settings.talk_rules.strip() else TEXTS[lang]["short"])]),
+                         # 电话（10-31）：只在通话时塞的说明，压在最后、离它开口最近；挂了就撤
+                         *([call_speech.rules(lang, monologue._ZH_PRONOUN.get(settings.user_pronoun, "TA")
+                                              if lang == "zh" else settings.user_pronoun)] if call is not None else [])]),
         images=images,
     )
     req = build_request(parts, model=route.chat_model, thinking=mode == "native", user_tag=user_tag(acc),
                         lang=lang)
+    if call is not None:
+        req.on_text = lambda t: call.feed(t)        # 边写边切句子，第一句写完就交给手机去念
     await emit({"type": "injections", "lines": lines})
     await emit({"type": "typing"})
 
@@ -639,9 +702,14 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
     started = time.monotonic()                   # 「思考了 x 秒」：从开口到说完（含中间调工具）
     out, err = None, None
     try:
-        out = await tool_loop(adapter, req, ctx, emit, lang, untagged=untagged, retag=settings.monologue_retry)
+        out = await tool_loop(adapter, req, ctx, emit, lang, untagged=untagged, retag=settings.monologue_retry, phone=call)
     except LLMError as e:
         err = e
+    except CallCut:                  # 电话里她开口了 / 挂了：写到哪算哪
+        out = LoopResult("", "", Usage(), [], 0)
+    if call is not None and err is None:
+        return await _call_done(deps, scope, call, out, route, req, state, state_key, turn_no, day, now, emit, lang, settings,
+                                adapter, parts, time.monotonic() - started)
     if err is not None and context_full(err):
         # 装不下了（模型窗口比记性长度小、或者积压，10-14）：卷账本只在一轮成功之后，不先卷就会每句都报这个错。
         # 先把前面卷进账本；私聊接着用短了的历史再试一次，群里让 TA 再发一次
@@ -651,6 +719,7 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
             left = {m.id for m in await archive.unrolled(pool, conv)}
             history = [m for m in history if m.id < 0 or m.id in left]
             hist, _ = history_msgs(history, lang)
+            hist = fold_tail(hist, "")[0]
             parts = replace(parts, history=squash(hist) if merged_rooms else hist,
                             ledger=ledger.render_ledger(await archive.get_ledger(pool, conv), monologue.clean_samples(state.get("voice_samples", []), untagged, lang == "zh"),
                                                         lang, settings.user_name))
@@ -680,6 +749,8 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
             await archive.log_turn(pool, conv, {"turn": turn_no, "wake": True, "silent": True, "model": route.chat_model,
                                                 "tools": out.tools_used, "usage": asdict(out.usage), "cost_usd": usd,
                                                 "thinking": out.thinking[-2000:]}, now=now)
+            if out.tool_notes:       # 不说话但去做了自己的事（逛论坛之类）：留一条，下次记得（10-30 内测）
+                await archive.add_message(pool, conv, "wake", silent_note(lang, out.tool_notes), now=now)
             return TurnOutcome(False, usd or 0.0)
         emit = real_emit
         for ev in held:
@@ -687,6 +758,17 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
         await archive.add_message(pool, conv, "wake", wake, now=now)
 
     out.text = model_noise.strip(out.text)       # 模型漏出来的内部标记（<ds_safety>…）不是它说的话（10-11）
+    out.text = timeline.strip_tag(out.text)      # 学着历史在开头垫的房间标签（10-31）
+    # 正文标记（10-31）：[表情包：#12] / ⟪里程碑：…⟫ 解出来照办；写坏了的也剥掉，不进气泡。群里、无痕只剥不办
+    parsed = markers.parse(out.text)
+    out.text = parsed.text
+    if (parsed.stickers or parsed.milestones) and not scope.incognito and group is None:
+        before_cards = len(ctx.cards)
+        out.tool_notes += await _safe(act_on_markers(ctx, parsed.stickers, parsed.milestones, sticker_lib), [])
+        for card in ctx.cards[before_cards:]:
+            out.cards.append({"kind": card.kind, "text": card.text, **({"data": card.data} if card.data else {})})
+            await emit({"type": "card", "kind": card.kind, "text": card.text, "private": card.private,
+                        **({"data": card.data} if card.data else {})})
     # 心声（10-11）：最后那段 [心声]…[/心声] 切下来，不进气泡、不念，存在这条上、单独推给 App 画小卡片
     out.text, voice_text = inner_voice.split(out.text)     # 没开也切掉（10-12：旧历史 / 人设里有，模型照写），只是不发卡
     if not settings.inner_voice:
@@ -711,7 +793,6 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
             plain = [voice.strip_tags(voice.body(b)) if voice.is_voice(b) else b for b in bubbles_out]
             trans = await bilingual.translate(deps, scope, plain, bilingual.speaks(settings), bilingual.target(settings), lang)
     tr = lambda j: {"translation": trans[j]} if j < len(trans) and trans[j] else {}
-    clip_ids: list = []
     for i, bubble in enumerate(bubbles_out):
         if i:
             await emit({"type": "typing"})
@@ -719,23 +800,15 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
         if not voice.is_voice(bubble):
             await emit({"type": "bubble", "text": bubble, **tr(i)})
             continue
-        # 语音条（10-03）：念出来挂上；不发档 / 无痕 / 念不成 → 当文字发，存档里那段也改成文字
-        clip = None
-        if settings.voice_mode != "off" and not scope.incognito:
-            near = lambda j: voice.strip_tags(voice.body(bubbles_out[j])) if 0 <= j < len(bubbles_out) else None
-            try:
-                clip = await voice.speak(deps, acc, text=voice.body(bubble), voice_id=settings.voice_id, purpose="note",
-                                         prev=near(i - 1), nxt=near(i + 1))
-            except voice.VoiceError as e:
-                log.info("voice note fell back to text: %s", e.kind)
-            except Exception:
-                log.exception("voice note crashed; sent as text")
-        if clip is None:
+        # 语音条（10-31 起按需念）：先落一个占位的语音条，TA 点了才合成（/messages/{mid}/speak，念过的挂在消息上）；
+        # 不发档 / 无痕 / 没钥匙 / 额度不够 → 当文字发，存档里那段也改成文字
+        speakable = (settings.voice_mode != "off" and not scope.incognito
+                     and await _safe(voice.can_speak(deps, acc, len(voice.body(bubble))), False))
+        if not speakable:
             out.text = out.text.replace(bubble, voice.as_text(bubble), 1)
             await emit({"type": "bubble", "text": voice.as_text(bubble), **tr(i)})
         else:
-            clip_ids.append(clip.id)
-            await emit({"type": "bubble", "text": voice.strip_tags(voice.body(bubble)), "voice": clip.public(), **tr(i)})
+            await emit({"type": "bubble", "text": voice.as_text(bubble), "lazy_voice": voice.lazy_public(bubble), **tr(i)})
     if not out.text.strip() and out.thinking.strip():
         log.warning("reply came out empty after cutting the monologue; thinking was: %s", out.thinking[-2000:])
     if voice_text and out.text.strip():
@@ -747,7 +820,6 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
                                           speaker=comp if group is not None else None,
                                           speaker_name=(persona.name or "TA") if group is not None else "",
                                           translations=trans or None)
-        await _safe(voice.attach(pool, acc, clip_ids, saved.id), None)
         if ctx.drawn:                                # 它画的图挂在这句上（10-15）
             await _safe(files.claim(pool, conv, ctx.drawn, saved.id), [])
         if group is not None:
@@ -781,6 +853,34 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
         await charge_trial(pool, acc, round(spent * 1_000_000))
     await emit({"type": "done"})
     return TurnOutcome(bool(out.text.strip()), usd or 0.0)
+
+
+async def _call_done(deps: Deps, scope: Scope, call: CallCtx, out: LoopResult, route: Route, req: ChatRequest, state: dict,
+                     state_key: UUID, turn_no: int, day: date, now: datetime, emit: Emit, lang: str, settings: Settings,
+                     adapter, parts: ContextParts, seconds: float) -> TurnOutcome:
+    """电话里这一轮收尾（10-31）：存的是念出来的那几句（一句一行），被打断的只存念到的 + 「——」；不切气泡、不念语音条。"""
+    pool, conv = deps.pool, scope.conversation
+    call.flush()
+    usd = cost(out.usage, route.chat_model)
+    if out.usage.input or out.usage.output:
+        await archive.add_usage(pool, scope.account, day, route.chat_model, out.usage, usd)
+    said = call.saved_text()
+    if said or out.cards:
+        saved = await archive.add_message(pool, conv, "assistant", said, tools="\n".join(out.tool_notes), cards=out.cards,
+                                          now=deps.now(), call={"id": call.id, **({"cut": True} if call.cut and said else {})})
+        call.assistant_msg = saved.id
+    state.update(turn_count=turn_no, last_tools=out.tools_used, last_prompt_tokens=out.last_prompt or state.get("last_prompt_tokens", 0))
+    await archive.save_state(pool, state_key, state)
+    await archive.log_turn(pool, conv, {"turn": turn_no, "model": route.chat_model, "call": call.id, "cut": call.cut,
+                                        "tools": out.tools_used, "usage": asdict(out.usage), "cost_usd": usd,
+                                        "first_line_s": round(seconds, 2)}, now=now)
+    info = lookup(route.chat_model)
+    high_water = settings.memory_length or (info.high_water if info else DEFAULT_HIGH_WATER)
+    if out.last_prompt and ledger.needs_roll(out.last_prompt, high_water) and \
+            ledger.worth_rolling(await archive.unrolled(pool, conv), high_water):
+        await _safe(roll(deps, scope, route, adapter, settings, state, parts, day, emit, state_key=state_key), None)
+    await emit({"type": "done"})
+    return TurnOutcome(bool(said), usd or 0.0)
 
 
 async def catch_up(deps: Deps, scope: Scope, route: Route, adapter, settings: Settings, state: dict,

@@ -69,7 +69,7 @@ struct AdvancedSettingsView: View {
                         Button("看出厂的") { store.s("talk_rules", "").wrappedValue = Self.factoryTalk }
                             .font(Typo.sans(Typo.Size.caption, .medium)).foregroundStyle(theme.accentDeep).buttonStyle(.plain)
                     }
-                    TextEditor(text: store.s("talk_rules", ""))
+                    DraftTextEditor(text: store.s("talk_rules", ""))
                         .font(Typo.sans(Typo.Size.callout)).frame(minHeight: 90).scrollContentBackground(.hidden)
                 }
             } header: { GlassHeader(String(localized: "回话")) } footer: {
@@ -94,8 +94,16 @@ struct AdvancedSettingsView: View {
                 }
                 VStack(alignment: .leading, spacing: 6) {
                     row("思考风格", Lite.on ? "手写独白时照这个写；空着就随 TA" : "空着用出厂的；写了就换成你的")
-                    TextEditor(text: store.s("thinking_style_text", ""))
+                    DraftTextEditor(text: store.s("thinking_style_text", ""))
                         .font(Typo.sans(Typo.Size.callout)).frame(minHeight: 90).scrollContentBackground(.hidden)
+                }
+                // 自己写的独白范文（11-03 Aporia）：换掉出厂那两段；本体化时也照用
+                if (store.settings["thinking_mode"] as? String ?? "") != "native" {
+                    VStack(alignment: .leading, spacing: 6) {
+                        row("独白范文", "写一两段你想要的心里话的样子，TA 照这个写法写独白（内容不照抄）。空着用出厂的")
+                        DraftTextEditor(text: store.s("monologue_examples", ""))
+                            .font(Typo.sans(Typo.Size.callout)).frame(minHeight: 90).scrollContentBackground(.hidden)
+                    }
                 }
                 // 回复后的心声（10-11 内测反馈）：说完以后在最后写几行心里话，聊天里是一张小卡片
                 Toggle(isOn: store.s("inner_voice", false)) {
@@ -104,7 +112,7 @@ struct AdvancedSettingsView: View {
                 if store.settings["inner_voice"] as? Bool ?? false {
                     VStack(alignment: .leading, spacing: 6) {
                         row("心声风格", "空着用出厂的；写了就换成你的")
-                        TextEditor(text: store.s("inner_voice_style", ""))
+                        DraftTextEditor(text: store.s("inner_voice_style", ""))
                             .font(Typo.sans(Typo.Size.callout)).frame(minHeight: 70).scrollContentBackground(.hidden)
                     }
                 }
@@ -207,7 +215,7 @@ struct AdvancedSettingsView: View {
             Tile {
                 VStack(alignment: .leading, spacing: 6) {
                     row("导入人设", "贴一整份人设进来，替换出厂的性格")
-                    TextEditor(text: store.p("imported", ""))
+                    DraftTextEditor(text: store.p("imported", ""))
                         .font(Typo.sans(Typo.Size.callout)).frame(minHeight: 90).scrollContentBackground(.hidden)
                 }
             }

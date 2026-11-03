@@ -45,11 +45,15 @@ public enum Prompt {
         let zh = i.lang == .zh
         let c = i.contact, me = i.identity
         var base = Resources.text("base", i.lang)
-        if c.mode == .offline {          // 线下：底子第一句不写死「在手机上」（照服务器 OFFLINE_OPENING）
+        let bare = c.bare == true
+        if bare {                        // 本体化（11-03）：开头那句身份和「你有自己的情绪…」换成只讲事实的；标记怎么写那几行照留
+            base = base.replacingOccurrences(of: zh ? offlineOpening.zh.0 : offlineOpening.en.0, with: zh ? bareOpening.zh : bareOpening.en)
+                .replacingOccurrences(of: zh ? bareFeelings.zh.0 : bareFeelings.en.0, with: zh ? bareFeelings.zh.1 : bareFeelings.en.1)
+        } else if c.mode == .offline {          // 线下：底子第一句不写死「在手机上」（照服务器 OFFLINE_OPENING）
             base = base.replacingOccurrences(of: zh ? offlineOpening.zh.0 : offlineOpening.en.0, with: zh ? offlineOpening.zh.1 : offlineOpening.en.1)
         }
         var parts = [base]
-        let pack = me.isMain ? c.relationshipPack?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "" : ""
+        let pack = me.isMain && !bare ? c.relationshipPack?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "" : ""   // 本体化：关系只写一句「你们的关系：恋人」
         if !pack.isEmpty { parts.append(pack) }
         parts.append((zh ? "你是 \(c.name)。\n" : "You are \(c.name).\n") + c.persona)
         var who: [String] = []
@@ -58,14 +62,19 @@ public enum Prompt {
         if pack.isEmpty, !me.relationship.isEmpty { who.append((zh ? "你们的关系：" : "Your relationship: ") + me.relationship) }
         if !who.isEmpty { parts.append((zh ? "## 对面这个人\n" : "## The person you're talking to\n") + who.joined(separator: "\n")) }
         // 线上那段的「你有自己的一天」看线下生活开关（10-05 Aporia：谈人机恋的有人不喜欢 AI 角色扮演，默认关）
+        let talk = c.talkRules?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if bare {                        // 本体化：线上线下只讲格式；用户自己写的说话规矩照放
+            parts.append(Resources.mode(c.mode == .online ? "bare_online" : "bare_offline", i.lang) + (talk.isEmpty ? "" : "\n" + talk))
+        } else {
         parts.append(c.mode == .online
             ? Resources.mode("online", i.lang)
                 .replacingOccurrences(of: "{talk}", with: c.talkRules.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                     .flatMap { $0.isEmpty ? nil : $0 } ?? Resources.mode("talk", i.lang))   // 说话规矩：用户写了就换成他的（10-05）
                 .replacingOccurrences(of: "{life}", with: Resources.mode((c.offlineLife ?? true) ? "life_on" : "life_off", i.lang))
             : Resources.mode("offline", i.lang))
-        let caps = i.stickers.map(\.caption).filter { !$0.isEmpty }
-        if !caps.isEmpty { parts.append((zh ? "## 你的表情包\n" : "## Your stickers\n") + caps.map { "- " + $0 }.joined(separator: "\n")) }
+        }
+        let stickers = StickerMenu(i.stickers).block(zh: zh)     // 编号表（10-31）：它写 [表情包：#12]
+        if !stickers.isEmpty { parts.append(stickers) }
         return parts.joined(separator: "\n\n")
     }
 
@@ -74,6 +83,12 @@ public enum Prompt {
              "你是 TA 的 AI 伙伴，陪 TA 过日子：记得 TA 说过的事，也会主动关心 TA。你们现在在哪、是见面还是隔着屏幕，照人设里的场景和你们的对话来。"),
         en: ("You are an AI companion living in a phone app, keeping them company day to day: you remember what they tell you, help them keep life in order, and check in on them.",
              "You are their AI companion, keeping them company day to day: you remember what they tell you and check in on them. Where you are right now, and whether you're together or talking through a screen, follows the scenario in your character and your conversation."))
+
+    static let bareOpening = (zh: "这是一个聊天 app，你在里面跟对方说话。", en: "This is a chat app; you're talking with them here.")
+    static let bareFeelings = (
+        zh: ("你有自己的情绪和想法：可以开玩笑、可以不同意、可以反问。对方发来图片，你看得见，就着图里的东西聊。", "对方发来图片，你看得见。"),
+        en: ("You have your own feelings and opinions: joke around, disagree, ask things back. When they send a photo, you can see it, so talk about what's in it.",
+             "When they send a photo, you can see it."))
 
     static func clock(_ d: Date, _ tz: TimeZone, _ lang: Lang) -> String {
         let f = DateFormatter()
@@ -136,7 +151,8 @@ enum Resources {
 /// 记忆库那几条只在接了记忆库时给（memoryTools = 记一条、翻一下的工具名）；说话那几条只在线上给（线下有自己的规矩）；
 /// 〔现在〕那行只在线下生活开着时给（10-08 真 key：关着也写这行，它反而老提自己在天台）
 public enum Handbook {
-    public static func text(zh: Bool, online: Bool, life: Bool, memoryTools: (remember: String, search: String)?) -> String {
+    /// bare = 本体化（11-03）：「说话再补几条」不放（纯文字那条在 bare_online 里）
+    public static func text(zh: Bool, online: Bool, life: Bool, memoryTools: (remember: String, search: String)?, bare: Bool = false) -> String {
         let lang: Lang = zh ? .zh : .en
         var notes = section("notes", lang)
         if !life {
@@ -148,7 +164,7 @@ public enum Handbook {
             parts.append(section("memory", lang).replacingOccurrences(of: "{remember}", with: m.remember)
                 .replacingOccurrences(of: "{search}", with: m.search))
         }
-        if online { parts.append(section("talk", lang)) }
+        if online && !bare { parts.append(section("talk", lang)) }
         return parts.filter { !$0.isEmpty }.joined(separator: "\n\n")
     }
 

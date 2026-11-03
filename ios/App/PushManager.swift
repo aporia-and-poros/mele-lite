@@ -16,6 +16,9 @@ final class PushDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCen
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         UNUserNotificationCenter.current().delegate = self
+        #if LITE
+        MainActor.assumeIsolated { HostVoIP.shared.start() }   // TA 打来（10-31）：被 VoIP 推送叫醒时也要先挂上
+        #endif
         return true
     }
 

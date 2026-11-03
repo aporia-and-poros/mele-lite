@@ -37,7 +37,7 @@ async def clip(cid: UUID, acc: UUID = Depends(account), a: Api = Depends(api)):
 
 @router.post("/messages/{mid}/speak")
 async def speak(mid: int, body: dict = Body(...), acc: UUID = Depends(account), a: Api = Depends(api)):
-    """念给我听：{index} = 它那条消息的第几个气泡。念过的直接回。"""
+    """念给我听：{index} = 它那条消息的第几个气泡。念过的直接回。语音条点播放也走这里（10-31 按需念）。"""
     pool = a.deps.pool
     row = await pool.fetchrow(
         """SELECT m.text, coalesce(m.speaker_id, c.companion_id) AS companion_id FROM chat_messages m JOIN conversations c ON c.id = m.user_id
@@ -49,9 +49,12 @@ async def speak(mid: int, body: dict = Body(...), acc: UUID = Depends(account), 
     i = int(body.get("index", -1))
     if not 0 <= i < len(bubbles):
         raise HTTPException(400, "没有这一条")
-    text = V.body(bubbles[i]) if V.is_voice(bubbles[i]) else bubbles[i]
+    note = V.is_voice(bubbles[i])      # 语音条（10-31 按需念）：点开那一下才念，带上前后句念得顺，念好挂在这条消息上
+    near = lambda j: V.as_text(bubbles[j]) if note and 0 <= j < len(bubbles) else None
+    text = V.body(bubbles[i]) if note else bubbles[i]
     try:
-        c = await V.speak(a.deps, acc, text=text, voice_id=s.voice_id, purpose="speak", message_id=mid)
+        c = await V.speak(a.deps, acc, text=text, voice_id=s.voice_id, purpose="note" if note else "speak", message_id=mid,
+                          prev=near(i - 1), nxt=near(i + 1))
     except V.VoiceError as e:
         raise _err(e.kind) from e
     return c.public()

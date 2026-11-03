@@ -120,7 +120,7 @@ async def start(deps, route, adapter, scope: Scope, minutes: int, label: str, da
         who = {"user": "TA", "assistant": "你"} if s.lang == "zh" else {"user": "Them", "assistant": "You"}
         msgs = [m for m in await archive.recent(pool, scope.conversation, 12) if m.role in who]
         chat = "\n".join(f"{who[m.role]}：{' '.join(m.text.split())[:120]}" for m in msgs)
-    req = ChatRequest(model=route.chat_model if route else "", system=[Block(render_base(persona, [], s.lang, relationship=s.relationship), cache=True)],
+    req = ChatRequest(model=route.chat_model if route else "", system=[Block(render_base(persona, [], s.lang, relationship=s.relationship, bare=s.bare_mode), cache=True)],
                       messages=[Msg("user", PROMPT[s.lang].format(minutes=minutes, what=_what(label, s.lang), n=LINES,
                                                                  facts=facts)
                                        + (RECENT_ASK[s.lang].format(chat=chat) if chat else "")

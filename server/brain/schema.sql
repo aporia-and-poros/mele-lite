@@ -22,6 +22,8 @@ ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS thinking_ms INT;
 ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS inner_voice TEXT NOT NULL DEFAULT '';
 -- 双语气泡（10-15）：跟气泡一一对应的译文（null = 那泡没有）；你的话是翻成 TA 那种语言的版本
 ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS translations JSONB;
+-- 电话（10-31）：{id 通话编号, cut 念到一半被打断, end 挂断那条, seconds, line「📞 通话时长」}；不是电话里的话是 null
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS call JSONB;
 
 CREATE TABLE IF NOT EXISTS ledger_days (           -- 账本：按天存，近的清楚、远的模糊
   user_id    UUID        NOT NULL,
@@ -821,6 +823,15 @@ CREATE TABLE IF NOT EXISTS host_pairing (
 -- Mele Host 推送中转（10-04）：apns_token 写成 relay:<编号> 的设备走Aporia的中转站；内容用手机给的钥匙加密，中转看不见
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS relay_secret TEXT;
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS push_key TEXT;
+
+CREATE TABLE IF NOT EXISTS voip_devices (           -- TA 打给你（10-31）：手机的 VoIP 推送登记（经推送中转），一部手机一行
+  account_id   UUID        NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  push_key     TEXT        NOT NULL,                -- 跟普通推送同一把加密钥匙：认得是哪部手机
+  relay_id     TEXT        NOT NULL,
+  relay_secret TEXT        NOT NULL,
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (account_id, push_key)
+);
 
 -- Mele Host 搬家（10-05）：手机里哪些房间条目已经搬过（kind + 手机里的编号），再点「搬过去」只补新的
 CREATE TABLE IF NOT EXISTS host_imported (

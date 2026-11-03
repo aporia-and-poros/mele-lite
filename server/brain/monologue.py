@@ -85,6 +85,15 @@ def recover_untagged(text: str, pronoun: str, zh: bool) -> tuple[str, str]:
     后面还有对 TA 说「你」的正文，就把开头那几行当独白；*动作* 开头的行不算。认不准原样不动。
     漏的那段不进气泡、不进历史，它下一轮就看不到自己漏过的样子（Poros 10-15 那次的思路）。跟 Monologue.recoverUntagged 同一个"""
     none = ("", text)
+    from . import inner_voice
+    # 11-03 内测截图：split_monologue 把心声接回正文末尾，正文没「你」时一路收到心声里提到 TA 的那行，正文连心声进了思考，
+    # 气泡只剩一个 [/心声]。心声先拿出去，只在前面的正文里找，找完接回去
+    if inner_voice.has(text or ""):
+        rest, voice = inner_voice.split(text)
+        mono, body = recover_untagged(rest, pronoun, zh)
+        if not mono:
+            return none
+        return mono, (f"{body}\n\n{inner_voice.context_line(voice, 'zh' if zh else 'en')}" if voice else body)
     if _TAG.search(text or "") or not pronoun or (not zh and pronoun.lower() not in ("she", "he")):
         return none
     you = _SAYS_YOU if zh else _YOU_EN
@@ -268,10 +277,31 @@ def _forms(settings: Settings) -> dict:
     return {"p": subj, "obj": obj, "poss": poss}
 
 
+_BARE_CUT = {"zh": ("\n\n范文（", "\n\n怎么想：\n{style}", ("- 独白没有听众", "- 独白里不计划")),
+             "en": ("\n\nExamples (", "\n\nHow you think:\n{style}", ("- The monologue has no audience", "- No planning the reply"))}
+
+
 def rules(settings: Settings, style: str) -> str:
-    """常驻在壹层（走缓存）的独白规矩 + 范文。style = 用户那份思考风格（出厂的或自己写的）。"""
+    """常驻在壹层（走缓存）的独白规矩 + 范文。style = 用户那份思考风格（出厂的或自己写的）。
+    本体化（11-03 Aporia：我们加的风格都去掉，用户自己写的照用，功能照留）：照样写 [独白]；范文、讲怎么想的那两条不放，
+    只剩格式（写在标签里、人称、先调工具）。style = 用户自己写的思考风格，有就照放在「怎么想」，没有那段也不放。
+    用户自己写的范文（monologue_examples，11-03）：写了就换掉我们那两段，本体化时也照放；没套 [独白] 标签的替它套上。"""
     lang = settings.lang if settings.lang in RULES else "en"
-    return RULES[lang].format(style=style.strip(), **_forms(settings))
+    text = RULES[lang]
+    examples, how, styled = _BARE_CUT[lang]
+    own_ex = settings.monologue_examples.strip()
+    if settings.bare_mode or own_ex:
+        text = text.split(examples)[0]
+        if settings.bare_mode:
+            if not style.strip():
+                text = text.replace(how, "")
+            text = "\n".join(l for l in text.split("\n") if not l.startswith(styled))
+        if own_ex:
+            if not _TAG.search(own_ex):
+                own_ex = f"[独白]\n{own_ex}\n[/独白]" if lang == "zh" else f"[monologue]\n{own_ex}\n[/monologue]"
+            text += examples + ("照这个写法，内容别照抄）：\n\n" if lang == "zh" else "write like this; don't copy the content):\n\n") \
+                + own_ex.replace("{", "{{").replace("}", "}}")
+    return text.format(style=style.strip(), **_forms(settings))
 
 
 def hook(settings: Settings) -> str:

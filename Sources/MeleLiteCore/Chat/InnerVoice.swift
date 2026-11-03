@@ -36,6 +36,8 @@ public enum InnerVoice {
             let cut = c.map { $0.range.location + $0.range.length } ?? ns.length
             rest = ns.replacingCharacters(in: NSRange(location: o.range.location, length: cut - o.range.location), with: "")
         }
+        // 落单的收尾（开头被别的切法拿走了，11-03 内测截图气泡里只剩 [/心声]）：只删标记
+        rest = close.stringByReplacingMatches(in: rest, range: NSRange(location: 0, length: (rest as NSString).length), withTemplate: "")
         return (rest.trimmingCharacters(in: .whitespacesAndNewlines), voice)
     }
 
@@ -44,13 +46,20 @@ public enum InnerVoice {
            : "What I really feel right after saying it: honest, blunt, unpolished. Write the part I didn't say out loud — what I meant instead, what I held back, what I'm secretly pleased about. A few lines is enough. First person; \(p) stays \"\(p)\", never \"you\"."
     }
 
-    /// 放在独白规矩后面（system 里）；用户写了风格就整段换掉出厂写法，格式那几句不换
-    public static func rules(zh: Bool, pronoun: String, style: String) -> String {
+    /// 放在独白规矩后面（system 里）；用户写了风格就整段换掉出厂写法，格式那几句不换。
+    /// bare = 本体化（11-03）：出厂写法和「只写这一轮」那句不放，只剩格式；用户写了写法就照放
+    public static func rules(zh: Bool, pronoun: String, style: String, bare: Bool = false) -> String {
         let own = style.trimmingCharacters(in: .whitespacesAndNewlines)
+        if bare {
+            let mine = own.isEmpty ? "" : "\n\(own)\n"
+            return zh
+                ? "【心声】每次回复说完以后，最后面再写一段心声，放在 [心声] 和 [/心声] 之间。\(mine)心声不算说出口的话，正文里不提心声。写完用 [/心声] 收尾，后面不再写字。"
+                : "[Inner voice] After every reply, at the very end, write an inner voice between [inner voice] and [/inner voice]. \(mine)It isn't something you said; the reply itself never mentions it. Close it with [/inner voice] and write nothing after."
+        }
         let st = own.isEmpty ? factoryStyle(zh: zh, pronoun: pronoun) : own
         return zh
-            ? "【心声】每次回复说完以后，最后面再写一段心声，放在 [心声] 和 [/心声] 之间：\n\(st)\n心声只是给\(pronoun)看的心里话，不算说出口的话；正文里不提心声。写完用 [/心声] 收尾，后面不再写字。"
-            : "[Inner voice] After every reply, at the very end, write an inner voice between [inner voice] and [/inner voice]:\n\(st)\nIt's what I feel, not something I said; the reply itself never mentions it. Close it with [/inner voice] and write nothing after."
+            ? "【心声】每次回复说完以后，最后面再写一段心声，放在 [心声] 和 [/心声] 之间：\n\(st)\n心声只写这一轮的反应，不接着前几轮的心声往下写；已经说开、改正了的事，不再翻出来纠结。\n心声只是给\(pronoun)看的心里话，不算说出口的话；正文里不提心声。写完用 [/心声] 收尾，后面不再写字。"
+            : "[Inner voice] After every reply, at the very end, write an inner voice between [inner voice] and [/inner voice]:\n\(st)\nIt's only about this turn: don't carry on from earlier inner voices, and don't keep going back to something already cleared up or corrected.\nIt's what I feel, not something I said; the reply itself never mentions it. Close it with [/inner voice] and write nothing after."
     }
 
     /// 每轮压在尾巴上的一行

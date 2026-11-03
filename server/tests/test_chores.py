@@ -77,6 +77,19 @@ async def test_keys_carry_chores_and_patch_moves(pool):
         assert media["vision_key"] == gm["id"] and media["image_key"] == gm["id"] and media["image_model"] == "my-image"
 
 
+async def test_patch_changes_chat_model(pool):
+    """10-29 内测：同一把钥匙换聊天模型，不用再加一把"""
+    e = Env(pool)
+    async with e.client(await e.login()) as c:
+        ds, gm = await _two_keys(c)
+        r = await c.patch(f"/keys/{ds['id']}", json={"chat_model": " deepseek-pro "})
+        assert r.status_code == 200 and r.json()["chat_model"] == "deepseek-pro"
+        assert {k["id"]: k for k in (await c.get("/keys")).json()}[ds["id"]]["chat_model"] == "deepseek-pro"
+        assert (await c.patch(f"/keys/{ds['id']}", json={"chat_model": "  "})).status_code == 400
+        r = await c.patch(f"/keys/{gm['id']}", json={"chores": ["draw"]})      # 不带 chat_model 就不动它
+        assert r.json()["chat_model"] == "gemini-3.5-flash-lite"
+
+
 async def test_old_media_put_writes_chores(pool):
     e = Env(pool)
     async with e.client(await e.login()) as c:

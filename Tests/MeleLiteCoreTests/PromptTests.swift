@@ -102,3 +102,46 @@ import Testing
         #expect(Prompt.build(input(c)).system.contains("大多数时候回一两句就够"))
     }
 }
+
+/// 本体化（11-03 Aporia）：我们加的风格都去掉，用户自己写的照用，功能照留。跟 Host test_bare_mode_* 同一组
+@Suite struct BareModeTests {
+    func input(_ c: Contact) -> PromptInput {
+        PromptInput(contact: c, identity: c.mainIdentity, history: [], stickers: [Sticker(sha: "a", file: "a.png", caption: "猫猫比心")],
+                    lang: .zh, now: Date(timeIntervalSince1970: 1_791_000_000), timeZone: TimeZone(identifier: "Asia/Singapore")!)
+    }
+
+    @Test func dropsOurVoiceKeepsFeatures() {
+        var c = sampleContact()
+        c.bare = true
+        c.relationshipPack = Relationship.pack("partner", zh: true)
+        c.identities[0].relationship = "恋人"
+        let s = Prompt.build(input(c)).system
+        #expect(s.hasPrefix("这是一个聊天 app，你在里面跟对方说话。"))
+        #expect(!s.contains("住在手机 app 里") && !s.contains("你有自己的情绪") && s.contains("对方发来图片，你看得见。"))
+        #expect(s.contains("[表情包：#编号]") && s.contains("⟪里程碑") && s.contains("⟪想查手机") && s.contains("猫猫比心"))   // 功能照留
+        #expect(s.contains("你们的关系：恋人") && !s.contains("撒娇"))
+        #expect(s.contains("现在是线上") && s.contains("写纯文字") && !s.contains("一两句就够") && !s.contains("嗯」「行」"))
+        c.talkRules = "不用敬语"
+        #expect(Prompt.build(input(c)).system.contains("不用敬语"))          // 用户自己写的说话规矩照用
+        c.mode = .offline
+        let off = Prompt.build(input(c)).system
+        #expect(off.contains("现在是线下") && off.contains("*单星号*") && !off.contains("三到六段"))
+        #expect(!Handbook.text(zh: true, online: true, life: false, memoryTools: nil, bare: true).contains("说话再补几条"))
+    }
+
+    @Test func monologueAndInnerVoiceStayAsFormat() {
+        let r = Monologue.rules(zh: true, pronoun: "她", style: "", bare: true)
+        #expect(r.contains("[独白] 和 [/独白]") && r.contains("先调工具") && !r.contains("范文") && !r.contains("怎么想") && !r.contains("没有听众") && !r.contains("打草稿"))
+        #expect(Monologue.rules(zh: true, pronoun: "她", style: "想得慢一点", bare: true).contains("怎么想：\n想得慢一点"))
+        let v = InnerVoice.rules(zh: true, pronoun: "她", style: "", bare: true)
+        #expect(v.contains("[心声] 和 [/心声]") && !v.contains("诚实、直白") && !v.contains("只写这一轮"))
+        #expect(InnerVoice.rules(zh: true, pronoun: "她", style: "只写一句", bare: true).contains("只写一句"))
+    }
+
+    @Test func ownExamplesReplaceOurs() {
+        let r = Monologue.rules(zh: true, pronoun: "她", style: "", examples: "她今天话很少。")
+        #expect(r.contains("范文（照这个写法，内容别照抄）：\n\n[独白]\n她今天话很少。\n[/独白]") && !r.contains("可乐鸡翅"))
+        #expect(Monologue.rules(zh: true, pronoun: "她", style: "", bare: true, examples: "[独白]\n嗯。\n[/独白]").hasSuffix("[独白]\n嗯。\n[/独白]"))
+        #expect(Monologue.rules(zh: true, pronoun: "她", style: "").contains("可乐鸡翅"))         // 没写就是我们的
+    }
+}

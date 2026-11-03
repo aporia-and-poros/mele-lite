@@ -366,13 +366,6 @@ enum LocalRooms {
         }
     }
 
-    static func matchSticker(_ s: LocalStore, _ wanted: String) -> Int? {
-        let w = wanted.trimmingCharacters(in: .whitespaces)
-        let all = s.collection("stickers")
-        if let hit = all.first(where: { ($0["caption"] as? String) == w }) { return hit["id"] as? Int }
-        return all.first(where: { ($0["caption"] as? String ?? "").contains(w) || w.contains($0["caption"] as? String ?? "\u{0}") })?["id"] as? Int
-    }
-
     // MARK: 里程碑
 
     /// 立一座；同一个联系人同一句一天内立过就不再立（10-05 真 key 测出来：它下一轮会把上一轮那座再写一遍）。返回立了没有

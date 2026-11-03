@@ -199,6 +199,16 @@ async def set_ledger_model(pool, account: UUID, key_id: UUID, ledger_model: str 
     return done.endswith("1")
 
 
+async def set_chat_model(pool, account: UUID, key_id: UUID, chat_model: str) -> bool:
+    """换一把钥匙的聊天模型（10-29 内测：同一把 key 想切模型得再加一把）。不试打：填错了聊不上，改回来就好。"""
+    chat_model = (chat_model or "").strip()[:100]
+    if not chat_model:
+        raise AuthError("要填一个聊天用的模型")
+    done = await pool.execute("UPDATE keyring SET chat_model = $3 WHERE id = $1 AND account_id = $2 "
+                              "AND provider <> 'elevenlabs'", key_id, account, chat_model)
+    return done.endswith("1")
+
+
 async def delete_key(pool, account: UUID, key_id: UUID) -> bool:
     return (await pool.execute("DELETE FROM keyring WHERE id = $1 AND account_id = $2", key_id, account)).endswith("1")
 

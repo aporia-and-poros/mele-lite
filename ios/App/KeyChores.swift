@@ -47,6 +47,7 @@ struct KeyChoresSheet: View {
     let onChanged: () -> Void
     @State private var picked: Set<String> = []
     @State private var drawModel = ""
+    @State private var chatModel = ""
     @State private var openOdd = false
     @State private var note: String?
 
@@ -64,6 +65,12 @@ struct KeyChoresSheet: View {
                         Text("ElevenLabs 只管声音。TA 的档位和嗓子在 TA 的设定 → 声音里挑。")
                     }
                 } else {
+                    Section {
+                        TextField("模型名字", text: $chatModel)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    } header: { Text("聊天模型") } footer: {
+                        Text("用这把钥匙聊天的 TA，下一句就换成这个模型。名字填错会聊不上，改回来就好。")
+                    }
                     Section {
                         ForEach(ChoreNames.sheet, id: \.self) { row($0) }
                         DisclosureGroup(isExpanded: $openOdd) {
@@ -87,7 +94,7 @@ struct KeyChoresSheet: View {
                 ToolbarItem(placement: .confirmationAction) { Button("存") { Task { await save() } } }
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
             }
-            .onAppear { picked = Set(key.chores); drawModel = key.drawModel }
+            .onAppear { picked = Set(key.chores); drawModel = key.drawModel; chatModel = key.chatModel }
         }
     }
 
@@ -108,7 +115,13 @@ struct KeyChoresSheet: View {
         let list = ChoreNames.media.filter(key.chores.contains) + ChoreNames.sheet.filter(picked.contains)
             + ChoreNames.odd.filter(picked.contains) + ChoreNames.own.filter(picked.contains)
         do {
-            let r: Saved = try await model.api.call("PATCH", "keys/\(key.id)", json: ["chores": list, "draw_model": drawModel])
+            var body: [String: Any] = ["chores": list, "draw_model": drawModel]
+            let m = chatModel.trimmingCharacters(in: .whitespacesAndNewlines)
+            if key.provider != "elevenlabs", m != key.chatModel {
+                guard !m.isEmpty else { note = String(localized: "要填一个聊天用的模型"); return }
+                body["chat_model"] = m
+            }
+            let r: Saved = try await model.api.call("PATCH", "keys/\(key.id)", json: body)
             onChanged()
             if r.moved.isEmpty { dismiss(); return }
             note = r.moved.map { String(localized: "「\(ChoreNames.label($0.chore))」从 \(names[$0.fromKey] ?? "另一把") 那把挪过来了") }

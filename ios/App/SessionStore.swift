@@ -23,6 +23,7 @@ final class SessionStore: ObservableObject {
         if let i = args.firstIndex(of: "-hostSelfTest"), args.count > i + 2, let u = URL(string: args[i + 1]) {
             HostLink.save(url: u, token: args[i + 2])
         }
+        if args.contains("-hostOff") { HostLink.disconnect() }      // 自测（10-31）：模拟器连着关掉的测试 Host 时先断开，用本机
         LocalHost.shared.debugSeedKey()
         LocalHost.shared.debugSeedGemini()
         // 自测（10-05）：SIMCTL_CHILD_LITE_TEST_SAY="<窗口编号>|<一句话>" 直接放进那个窗口的输入框（模拟器敲不了中文）

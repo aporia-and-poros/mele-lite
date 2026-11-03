@@ -88,6 +88,19 @@ struct VoiceSettingsSection: View {
             if !open {
                 chosenRow
             }
+            // 打电话时 TA 用哪种声音（10-31）：快 = 低延迟那档；有表情 = 语音条那个模型；iPhone 自带 = 免费、不用 key（明着选的，不是失败时偷换）
+            if Lite.local {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("电话里的声音").font(Typo.sans(Typo.Size.callout)).foregroundStyle(theme.inkDim)
+                    Picker("电话里的声音", selection: store.s("call_voice", "fast")) {
+                        Text("快").tag("fast")
+                        Text("有表情").tag("expressive")
+                        Text("iPhone 自带").tag("system")
+                    }
+                    .pickerStyle(.segmented)
+                    Text(callVoiceNote).font(Typo.sans(Typo.Size.caption)).foregroundStyle(theme.inkFaint)
+                }
+            }
             ExpandRow(open: $open) {
                 Text(open ? "收起" : "换嗓子、描述一把、ElevenLabs key")
                     .font(Typo.sans(Typo.Size.callout)).foregroundStyle(theme.inkDim)
@@ -149,6 +162,14 @@ struct VoiceSettingsSection: View {
                 store.settings["voice_name"] = name
             }
             .presentationDetents([.large])
+        }
+    }
+
+    private var callVoiceNote: String {
+        switch store.settings["call_voice"] as? String ?? "fast" {
+        case "expressive": String(localized: "跟语音条同一个模型，语气更丰富，开口慢一点。走你的 ElevenLabs key。")
+        case "system": String(localized: "iPhone 自带的声音，免费、不用 ElevenLabs key，听起来是机器念的。")
+        default: String(localized: "开口最快的那档，走你的 ElevenLabs key。")
         }
     }
 

@@ -160,8 +160,8 @@ async def visit(deps, v, now: datetime) -> str:
     nm = await MO.names(pool, acc)
     persona = Persona.from_dict(await archive.get_persona(pool, comp), s.lang)
     core = [x.content for x in sorted(await M.list_memories(pool, comp, kind="core"), key=lambda x: x.id)]
-    base = render_base(persona, core, s.lang, tone=tone_lines(s.lang, s.warmth, s.initiative, s.humor),
-                       relationship=s.relationship, chat_rules=False)
+    base = render_base(persona, core, s.lang, tone=[] if s.bare_mode else tone_lines(s.lang, s.warmth, s.initiative, s.humor),
+                       relationship=s.relationship, chat_rules=False, bare=s.bare_mode)
     recent = await _recent(pool, acc, comp, s.lang, s.user_name)
     ask = render(m, nm, str(comp), s.lang, comment=cmt,
                  minutes_ago=max(1, int((now - m.created_at).total_seconds() // 60)))

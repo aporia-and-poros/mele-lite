@@ -55,6 +55,9 @@ class AnthropicAdapter:
         kw = self.build(req)
         try:
             async with self.client.messages.stream(**kw) as s:
+                if req.on_text:                      # 电话：边写边念（10-31）
+                    async for t in s.text_stream:
+                        req.on_text(t)
                 final = await s.get_final_message()
         except anthropic.APIStatusError as e:
             msg = str(getattr(e, "message", e))

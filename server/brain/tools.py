@@ -4,6 +4,7 @@
 每调一次挂一张小卡片给网页看；工具出错不抛，把错误当结果还给模型，让它自己圆。"""
 from __future__ import annotations
 
+import json
 import random
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -70,6 +71,7 @@ class ToolContext:
     mcp: dict = field(default_factory=dict)   # 这一轮外面的工具：给模型的名字 → (服务, 原名)（10-05，brain/mcp.py）
     conversation: UUID | None = None   # 这一轮在哪个窗口（画的图挂在这儿，10-15）
     drawn: list = field(default_factory=list)   # 这一轮它画的图（附件号）：跟它的话一起存
+    end_turn: bool = False           # 用完这个工具这一轮就收（打电话：在响，等 TA 接，10-31）
 
     @property
     def people_owner(self) -> UUID:
@@ -470,23 +472,25 @@ async def _diary(ctx: ToolContext, a: dict) -> str:
     raise ValueError("action 只能是 read / key")
 
 
-# ── 表情包（10-01）：TA 的库，按意思找、挑一张发 ──
+# ── 正文标记（10-31）：发表情包、立里程碑不走工具了，它写 [表情包：#12] / ⟪里程碑：…⟫，回复写完这边照办 ──
 
-async def _sticker(ctx: ToolContext, a: dict) -> str:
-    acc, action = ctx.account_id or ctx.user_id, str(a.get("action") or "")
-    if action == "search":
-        got = await ST.search(ctx.pool, ctx.embedder, acc, ctx.user_id, str(a.get("query") or ""))
-        if not got:
-            return "没找到合适的（TA 的表情包库里可能还没有这种）。不发也行。"
-        return "\n".join(f"#{s.id} {s.caption}" + (f"（TA 叫它「{s.name}」）" if s.name else "") for s in got)
-    if action == "send":
-        s = await ST.usable(ctx.pool, acc, ctx.user_id, int(a.get("id") or 0))
-        if s is None:
-            return "没有这张（编号用 search 找）。"
+async def act_on_markers(ctx: ToolContext, stickers: list[str], milestones: list[str], library: list) -> list[str]:
+    """照标记办事，卡挂进 ctx.cards；返回存档里那几行（下一轮它在历史里看得到自己发过什么）。
+    library = 这一轮给它看的那张表（brain/stickers.for_companion）；表里没有的编号不发。"""
+    notes: list[str] = []
+    sent: set[int] = set()
+    for want in stickers:
+        s = ST.resolve(library, want)
+        if s is None or s.id in sent:
+            continue
+        sent.add(s.id)
         await ST.mark_used(ctx.pool, s.id, ctx.now)
         ctx.cards.append(Card("sticker", s.caption[:60], data={"sticker_id": s.id}))
-        return "发出去了，会跟你这句话一起显示。"
-    raise ValueError("action 只能是 search / send")
+        notes.append(_NOTE[ctx.lang]["sticker_send"].format(c=f"#{s.id} {_snip(s.caption)}"))
+    for title in milestones:
+        r = await _milestone(ctx, {"title": title})
+        notes.append(tool_note("milestone", {"title": title}, r, ctx.lang))
+    return notes
 
 
 # ── 朋友圈（10-01）：聊天里发一条 / 改签名 / 翻最近的；来刷时点赞、评论（这两把只在来刷那一轮有） ──
@@ -706,6 +710,25 @@ _REL_CARD = {"zh": {"partner": "你们在一起了", "friend": "你们现在是�
                     "buddy": "You're buddies now"}}
 
 
+async def _phone_call(ctx: ToolContext, a: dict) -> str:
+    """打电话（10-31 第 4 步）：VoIP 推送叫醒 TA 的手机；打出去这一轮就收，接了你先开口"""
+    ringer = getattr(ctx.deps, "ringer", None)
+    if ringer is None or ctx.conversation is None:
+        return "打不了：这台 Host 没开打电话"
+    if a.get("withdraw"):
+        ok = await ringer.withdraw(ctx.conversation)
+        return "挂掉了，TA 那边显示「对方已取消」" if ok else "现在没有在响的电话"
+    from .persona import Persona
+    name = Persona.from_dict(await archive.get_persona(ctx.pool, ctx.user_id), ctx.lang).name or "Mele"
+    got = await ringer.place(ctx.people_owner, ctx.user_id, ctx.conversation, str(a.get("reason") or ""), name)
+    if got == "ringing":
+        ctx.end_turn = True
+        return "电话打出去了，在响。等 TA 接。"
+    return {"busy": "没打出去：上一通还在响",
+            "no_device": "没打出去：TA 的手机还没登记来电（要更新 App、开着推送）。想说什么就打字说。",
+            }.get(got, "没打出去：推送没送到 TA 的手机。想说什么就打字说。")
+
+
 async def _relationship(ctx: ToolContext, a: dict) -> str:
     to = str(a.get("to") or "").strip()
     if to not in _REL_NAME["zh"]:
@@ -860,12 +883,12 @@ _AT = {"type": "string", "description": "TA 那边的本地时间，格式 YYYY-
 _TOOLS: dict[str, tuple[ToolSpec, Callable[[ToolContext, dict], Awaitable[str]]]] = {
     "memory_remember": (ToolSpec("memory_remember", "用途：记下一件一年后还想记得的事（TA 的纠正、你们说定的事、让你心里一动的话、TA 生活里的大事）。同一个话题合成一条；只记确定的事，不记猜测；闲聊、记过的、只管今天的、一时的见闻感受不记。细则见手册 memory。", {
         "type": "object", "required": ["content"], "properties": {
-            "content": {"type": "string", "description": "要记住的事，一两句，写清楚是谁、什么事"},
+            "content": {"type": "string", "description": "要记住的事，一两句，写清楚是谁、什么事。用你自己的口吻：你自己写「我」，对方写 TA 的名字（不知道就写「TA」），不写「你」——以后翻出来才分得清是谁"},
             "importance": {"type": "integer", "minimum": 1, "maximum": 10, "description": "多重要，1-10"},
             "tags": {"type": "array", "items": {"type": "string"}, "description": "几个标签"},
             "valence": {"type": "number", "minimum": -1, "maximum": 1, "description": "情绪正负，-1 到 1"},
             "arousal": {"type": "number", "minimum": 0, "maximum": 1, "description": "情绪强弱，0 到 1"},
-            "update_id": {"type": "integer", "description": "改一条已有的记忆：它的编号（提示「很像」时用）"},
+            "update_id": {"type": "integer", "description": "改一条已有的记忆：它的编号（提示「很像」时用；TA 纠正你记错的事，也用它把那条改对）"},
             "force_new": {"type": "boolean", "description": "提示「很像」但确实是另一件事时，设 true 另存一条"},}}),
         _remember),
     "memory_search": (ToolSpec("memory_search", "用途：翻记忆。TA 提到人名、地名、日子、旧事，或问「你记得吗」时，先翻再答，别凭印象。", {
@@ -952,12 +975,6 @@ _TOOLS: dict[str, tuple[ToolSpec, Callable[[ToolContext, dict], Awaitable[str]]]
             "action": {"type": "string", "enum": ["read", "key"]},
             "day": {"type": "string", "description": "哪天，YYYY-MM-DD；不填 = 昨天"}}}),
         _diary),
-    "sticker": (ToolSpec("sticker", "用途：发表情包（TA 自己收的库）。search=按意思找（「得意」「委屈」「摸摸头」），拿到几张的描述；send=发其中一张，跟你这句话一起显示。像真人那样偶尔发：接得上此刻的情绪才发，不每句都发，不连着发。", {
-        "type": "object", "required": ["action"], "properties": {
-            "action": {"type": "string", "enum": ["search", "send"]},
-            "query": {"type": "string", "description": "search：想表达的意思"},
-            "id": {"type": "integer", "description": "send：哪一张（search 给的编号）"}}}),
-        _sticker),
     "moments": (ToolSpec("moments", "用途：你自己的朋友圈。post=发一条：心里有句话不想在聊天里说完就算了，想留在那儿等 TA 哪天翻到——就发；只是聊得开心不算理由。写一到三句，口气跟你平时一样随意；note 是只有你自己看得到的备注，写下为什么发、那会儿你们在说什么，以后回评论时用得上。sign=改你朋友圈主页的签名。recent=看最近几条（谁发的、谁赞了、评论）。", {
         "type": "object", "required": ["action"], "properties": {
             "action": {"type": "string", "enum": ["post", "sign", "recent"]},
@@ -1019,7 +1036,7 @@ _TOOLS: dict[str, tuple[ToolSpec, Callable[[ToolContext, dict], Awaitable[str]]]
             "content": {"type": "string", "description": "put：信的正文"},
             "unlock_at": {"type": "string", "description": "put：哪天 TA 能拆，YYYY-MM-DD；不设就只能靠钥匙"}}}),
         _drawer),
-    "offer_focus": (ToolSpec("offer_focus", "用途：TA 说要学习 / 干活一段时间时，挂一张带「开始专注」按钮的卡片。TA 点了才开始，开始后 TA 刷分心的 app，手机会弹你写的提醒。别每次都提，TA 想专注的时候再提。", {
+    "offer_focus": (ToolSpec("offer_focus", "用途：TA 说要学习 / 干活一段时间时，挂一张带「开始专注」按钮的卡片。TA 点了才开始，开始后 TA 刷分心的 app，手机会弹你写的提醒。别每次都提，TA 想专注的时候再提。锁 App 由开专注时的开关管：TA 选整组立刻锁，或交给你定第几条提醒后锁。这张卡和你手上都没有锁 / 解锁的按钮，你也认不出 TA 选了哪几个 App（苹果只给代号），只能整组一起锁。TA 让你锁这个、留那个，照实说做不到，让 TA 去专注页的开关里选。", {
         "type": "object", "required": ["minutes"], "properties": {
             "minutes": {"type": "integer", "minimum": 15, "maximum": 600, "description": "多久（分钟，最少 15）"},
             "label": {"type": "string", "description": "在忙什么，几个字（背单词、写论文）"}}}),
@@ -1052,10 +1069,11 @@ _TOOLS: dict[str, tuple[ToolSpec, Callable[[ToolContext, dict], Awaitable[str]]]
         "type": "object", "required": ["to"], "properties": {
             "to": {"type": "string", "enum": ["friend", "partner", "family", "buddy"], "description": "改成什么关系"}}}),
                _relationship),
-    "milestone": (ToolSpec("milestone", "用途：立一座里程碑。这一刻值得记住的时候用，比如第一次一起做的事、说好的约定。TA 在大事记里看得到。", {
-        "type": "object", "required": ["title"], "properties": {
-            "title": {"type": "string", "description": "一句短标题，十几个字；一件事一座，两件就立两座"}}}),
-        _milestone),
+    "phone_call": (ToolSpec("phone_call", "用途：给 TA 打语音电话。什么时候打你自己定——想听 TA 的声音、有话打字说不清、TA 说了让你打，都可以；别为了一件小事就打，也别一聊就打。打出去以后这一轮就结束了，等 TA 接：接了你先开口；没接、拒绝，下一轮你会看到。reason 写一句你为什么想打（TA 来电页上看得到，口气跟你平时一样）。还没接通就想反悔：withdraw = true 挂掉。", {
+        "type": "object", "properties": {
+            "reason": {"type": "string", "description": "为什么想打，一句"},
+            "withdraw": {"type": "boolean", "description": "true = 还没接通就挂掉"}}}),
+        _phone_call),
     "list_clocks": (ToolSpec("list_clocks", "用途：看你自己约的，带编号和时间（TA 的提醒在待办里，用 todo 看）。", {
         "type": "object", "properties": {}}),
         _list_clocks),
@@ -1069,7 +1087,7 @@ INCOGNITO_TOOLS = ("read_manual",)
 # 只在某些单独的小轮里给的（朋友圈来刷：点赞、评论），聊天里不给
 SIDE_TOOLS = ("moment_like", "moment_comment", "album_write", "tarot_write")
 # 有条件才给的（画图：Me 里挑了画图钥匙，10-15）：extra 里点名才进清单，能不能用工具自己再查
-OPTIONAL_TOOLS = ("draw",)
+OPTIONAL_TOOLS = ("draw", "phone_call")   # 打电话（10-31）：手机登记过来电、不在电话里 / 群里 / 无痕才给
 
 
 def tool_specs(incognito: bool = False, extra: tuple[str, ...] = ()) -> list[ToolSpec]:
@@ -1226,4 +1244,6 @@ def tool_note(name: str, args: dict, result: str, lang: str) -> str:
     if name == "lore":
         line = t["lore_write" if a.get("action") == "write" else "lore_get"].format(n=n)
         return line if not result.startswith(("工具出错", "这条是 TA 写的")) else f"{line} ✗"
+    if a:                     # 外接 MCP 之类认不得的工具：带上它填的东西，下次看得出做了什么（10-30：醒来逛论坛）
+        return f"{name}（{_snip(json.dumps(a, ensure_ascii=False), 60)}）"
     return name

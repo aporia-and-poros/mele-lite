@@ -26,6 +26,7 @@ struct ChatView: View {
     @EnvironmentObject var chat: ChatStore
     @EnvironmentObject var avatars: AvatarStore
     @EnvironmentObject var session: SessionStore
+    @EnvironmentObject private var model: AppModel
     @Environment(\.scenePhase) private var scenePhase
     @State private var wentBackground = false
     @ObservedObject private var favorites = FavoritesStore.shared
@@ -128,8 +129,12 @@ struct ChatView: View {
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var filePickerPresented = false
     @State private var imageViewer: ImageViewerState?
+    @State private var callLog: CallLogTarget?
+    @State private var visitingMoments: MomentsVisit?    // 点 TA 的头像进 TA 的朋友圈（11-03 Aporia，照微信）
     #if LITE
     @State private var consentAsk: LiteConsent.Ask?
+    @State private var calling = false          // 语音通话（10-31）
+    @State private var showCallHistory = false  // 通话记录（10-31，第 5 步）
     #endif
 
     private var skin: ChatSkin {
@@ -151,7 +156,7 @@ struct ChatView: View {
         chat.items.filter { item in
             switch item.kind {
             case .thinking: return showThinking && !item.text.isEmpty   // 开头占位的那行不画（10-01 Aporia：还是只有三个点好看）
-            case .card("divider"): return true                         // 搬来的那几段的分隔行，跟动作卡片开关无关
+            case .card("divider"), .card("callEnd"), .card("callRing"): return true        // 搬来的那几段的分隔行、通话时长那行，跟动作卡片开关无关
             case .card, .deeds: return showActionCards
             case .text, .song, .sticker, .innerVoice: return true
             }
@@ -250,6 +255,12 @@ struct ChatView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .lumiFocusSaid)) { _ in Task { await chat.catchUp() } }
         .task {
+            #if DEBUG && LITE
+            if CommandLine.arguments.contains("-callSelfTest") && !isMoment && group == nil {     // 自测（10-31）
+                try? await Task.sleep(for: .seconds(1.5))
+                calling = true
+            }
+            #endif
             if Self.selfTest && !isMoment { await runSelfTest() }
             // 自测：-openMoment <消息号> 直接开「回到那天」
             let args = ProcessInfo.processInfo.arguments
@@ -269,6 +280,36 @@ struct ChatView: View {
             .environmentObject(theme)
             .environmentObject(chat)
             .environmentObject(avatars)
+        }
+        #if LITE
+        .fullScreenCover(isPresented: $calling) {
+            CallView(conversation: chat.conversation.uuidString.lowercased(), api: chat.api, name: companionName, avatar: avatars.ai) {
+                calling = false
+            }
+        }
+        #endif
+        .sheet(item: $callLog) { t in
+            Group {
+                #if LITE
+                // 按通话编号取、TA 每句能重听（本机读手机里的，连着 Host 问 Host）
+                CallDetailSheet(conversation: chat.conversation.uuidString.lowercased(), endMessage: t.id, name: companionName,
+                                api: chat.api)
+                #else
+                CallLogSheet(title: t.title, lines: chat.callLines(endingAt: t.id), name: companionName)
+                #endif
+            }
+            .environmentObject(theme)
+            .presentationDetents([.medium, .large])
+        }
+        #if LITE
+        .sheet(isPresented: $showCallHistory) {
+            CallHistoryView(conversation: chat.conversation.uuidString.lowercased(), name: companionName, api: chat.api)
+                .environmentObject(theme)
+                .presentationDetents([.large])
+        }
+        #endif
+        .fullScreenCover(item: $visitingMoments) { v in
+            MomentsView(api: chat.api, who: v.who).environmentObject(model).environmentObject(theme)
         }
         .fullScreenCover(item: $moment) { target in
             MomentRoom(companionID: companionID, conversation: chat.conversation, anchor: target.id, api: chat.api)
@@ -650,11 +691,20 @@ struct ChatView: View {
             }
             Divider()
             // 改备注挪进了「TA 的设定」（09-28：菜单太长，TA 的设定被挤到要滚才看得到）
-            // 打电话以后做，先占个位
+            // 打电话（10-31）：Lite 本机先能打；连着 Host 的、正式版还占着位
+            #if LITE
+            if Lite.on && group == nil {         // 连着 Host 也能打（10-31 第 3 步；Host 要 update 到带电话的那版）
+                Button { calling = true } label: { Label("语音通话", systemImage: "phone.fill") }
+                Button { showCallHistory = true } label: { Label("通话记录", systemImage: "clock.arrow.circlepath") }
+            } else {
+                Button {} label: { Label("打电话（以后做）", systemImage: "phone.fill") }.disabled(true)
+            }
+            #else
             Button {} label: {
                 Label("打电话（以后做）", systemImage: "phone.fill")
             }
             .disabled(true)
+            #endif
             if onNewWindow != nil || onIncognito != nil || onSettings != nil {
                 Divider()
                 if !incognito, let onNewWindow, let onIncognito {
@@ -942,6 +992,36 @@ struct ChatView: View {
             } else if case .deeds(let deeds) = item.kind {
                 DeedsRow(deeds: deeds, at: item.at, skin: skin)
                 Spacer(minLength: 0)
+            } else if case .card("callEnd") = item.kind {
+                // 电话（10-31）：照微信只留一行；点开看这通说了什么
+                Button { callLog = CallLogTarget(id: item.messageID ?? 0, title: item.text) } label: {
+                    HStack(spacing: 4) {
+                        Text(item.text)
+                        Image(systemName: "chevron.right").font(Typo.icon(9, .semibold))
+                    }
+                    .font(Typo.sans(skin.size(Typo.Size.caption))).foregroundStyle(skin.inkFaint)
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .background(Capsule().fill(skin.inkFaint.opacity(0.1)))
+                }
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity).padding(.vertical, 8)
+            } else if case .card("callRing") = item.kind {
+                // TA 打来没接通（10-31 第 4 步）：照微信一行灰字，点了回拨
+                Button {
+                    #if LITE
+                    calling = true
+                    #endif
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(item.text)
+                        Image(systemName: "phone.arrow.up.right").font(Typo.icon(10, .semibold))
+                    }
+                    .font(Typo.sans(skin.size(Typo.Size.caption))).foregroundStyle(skin.inkFaint)
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .background(Capsule().fill(skin.inkFaint.opacity(0.1)))
+                }
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity).padding(.vertical, 8)
             } else if case .card("divider") = item.kind {
                 Text(item.text).font(Typo.sans(skin.size(Typo.Size.caption))).foregroundStyle(skin.inkFaint)
                     .multilineTextAlignment(.center).frame(maxWidth: .infinity).padding(.vertical, 10)
@@ -1017,11 +1097,18 @@ struct ChatView: View {
     private func avatarIDs(_ list: [ChatItem]) -> Set<Int> {
         var out: Set<Int> = []
         var speaker: String?
-        for item in list where Self.runKey(item) != speaker {
+        for item in list {
+            if Self.isLine(item) { speaker = nil; continue }      // 灰色分隔行（搬来的段落头、通话时长）不算谁说的，也不挂头像
+            guard Self.runKey(item) != speaker else { continue }
             out.insert(item.id)
             speaker = Self.runKey(item)
         }
         return out
+    }
+
+    private static func isLine(_ item: ChatItem) -> Bool {
+        if case .card(let k) = item.kind { return k == "divider" || k == "callEnd" || k == "callRing" }
+        return false
     }
 
     /// 一串 = 同一个人连着说的（群里不同 TA 断开，10-11）
@@ -1033,6 +1120,7 @@ struct ChatView: View {
         var speaker: String?
         var pending = false
         for item in list {
+            if Self.isLine(item) { speaker = nil; continue }
             if Self.runKey(item) != speaker {
                 speaker = Self.runKey(item)
                 pending = true
@@ -1087,7 +1175,8 @@ struct ChatView: View {
                             VoiceRef(id: $0.id.uuidString.lowercased(), durationMs: ($0.seconds ?? 0) * 1000,
                                      path: "attachments/\($0.id.uuidString.lowercased())") }) {
                             VoiceNoteContent(voice: v, transcript: item.text, ink: skin.bubbleInk(mine: mine),
-                                             accent: theme.accent, fontSize: skin.size(Typo.Size.headline))
+                                             accent: theme.accent, fontSize: skin.size(Typo.Size.headline),
+                                             messageID: item.messageID, bubble: item.bubble)
                             if !mine, let t = item.translation, !t.isEmpty {
                                 Text(t).font(Typo.sans(skin.size(Typo.Size.callout))).foregroundStyle(skin.bubbleInk(mine: mine).opacity(0.72))
                             }
@@ -1353,14 +1442,24 @@ struct ChatView: View {
     /// 「头像在旁边」那一列：整串都留 30pt，只有第一条真的放头像。
     /// overhang：挂在思考链那一行时头像不撑高这一行，往下探出去落在第一条气泡旁边
     /// 群里 TA 的头像（按 speaker）；其余照旧
+    /// 点 TA 的头像进 TA 的朋友圈（11-03 Aporia，照微信）；群里点谁进谁的。自己的头像不管
     @ViewBuilder
     private func avatar(mine: Bool, speaker: UUID?, size: CGFloat) -> some View {
-        if group != nil, !mine {
-            MemberAvatar(look: speaker.flatMap { memberLook[$0] }, size: size)
-        } else {
-            AvatarView(who: mine ? .me : .ai, size: size)
+        Group {
+            if group != nil, !mine {
+                MemberAvatar(look: speaker.flatMap { memberLook[$0] }, size: size)
+            } else {
+                AvatarView(who: mine ? .me : .ai, size: size)
+            }
+        }
+        .contentShape(Circle())
+        .onTapGesture {
+            guard !mine else { return }
+            visitingMoments = MomentsVisit(who: (group != nil ? speaker ?? companionID : companionID).uuidString.lowercased())
         }
     }
+
+    struct MomentsVisit: Identifiable { let who: String; var id: String { who } }
 
     /// 群里一串开头的名字小字
     private func speakerName(_ speaker: UUID?) -> some View {
@@ -1491,6 +1590,11 @@ struct ChatView: View {
                     Button { photoPickerPresented = true } label: { Label("照片", systemImage: "photo") }
                     Button { filePickerPresented = true } label: { Label("文件", systemImage: "doc") }
                     Button { stickerPanel = true } label: { Label("表情包", systemImage: "face.smiling") }
+                    #if LITE
+                    if Lite.on && group == nil && !isMoment {
+                        Button { calling = true } label: { Label("语音通话", systemImage: "phone") }   // 微信放在 + 里（10-31）
+                    }
+                    #endif
                 } label: {
                     Image(systemName: "plus")
                         .font(Typo.icon(18, .semibold))
@@ -2311,5 +2415,48 @@ func paintedChrome<S: InsettableShape>(_ shape: S, skin: ChatSkin,
                            startPoint: light == .diagonal ? .topLeading : .bottom,
                            endPoint: light == .diagonal ? .bottomTrailing : .top),
             lineWidth: 0.75)
+    }
+}
+
+/// 点开的那通电话（10-31）
+struct CallLogTarget: Identifiable {
+    let id: Int
+    let title: String
+}
+
+/// 一通电话说了什么：你在右、TA 在左，跟通话页的字幕一个样子
+struct CallLogSheet: View {
+    @EnvironmentObject private var theme: AppTheme
+    let title: String
+    let lines: [(mine: Bool, text: String)]
+    let name: String
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                LazyVStack(spacing: 10) {
+                    if lines.isEmpty {
+                        Text("这通电话的记录不在眼前，往上翻一翻再点").font(Typo.sans(Typo.Size.callout))
+                            .foregroundStyle(theme.inkFaint).padding(.top, 40)
+                    }
+                    ForEach(Array(lines.enumerated()), id: \.offset) { _, l in
+                        HStack {
+                            if l.mine { Spacer(minLength: 48) }
+                            Text(l.text)
+                                .font(Typo.sans(Typo.Size.body))
+                                .foregroundStyle(theme.ink)
+                                .padding(.horizontal, 13).padding(.vertical, 9)
+                                .background(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .fill(l.mine ? theme.accent.opacity(0.22) : theme.ink.opacity(0.06)))
+                                .textSelection(.enabled)
+                            if !l.mine { Spacer(minLength: 48) }
+                        }
+                    }
+                }
+                .padding(16)
+            }
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+        }
     }
 }

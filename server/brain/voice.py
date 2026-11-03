@@ -1,6 +1,7 @@
 """声音 · 它发语音条（10-03，设计 docs/specs/2026-10-03-voice-notes-design.md，计划 docs/plans/2026-10-03-voice-notes.md）。
 
-- 它在回复里用 `🎤` 开头标一段 → 分条发时那段自己成一条 → speak() 念出来，存成一段 mp3 挂在消息上。
+- 它在回复里用 `🎤` 开头标一段 → 分条发时那段自己成一条 → 先落一个占位的语音条（lazy_public：编号 + 估的秒数，不花钱）；
+  TA 点了才念（10-31 按需念：/messages/{mid}/speak），念好存成一段 mp3 挂在消息上。
 - 钥匙：账号钥匙串里有 ElevenLabs key 就用它的（不扣额度）；没有就用我们的（NEWAPP_ELEVENLABS_KEY），按字数扣声音额度。
 - 念过的按「文字 + 嗓子 + 模型」指纹存着，同一句再念（比如「念给我听」点第二次）不再花钱。
 - 任何一步不成都抛 VoiceError，调用方回落成文字——不卡、不丢。"""
@@ -96,6 +97,29 @@ def strip_tags(text: str) -> str:
 def as_text(bubble: str) -> str:
     """念不成的时候：这一条照常当文字发（去 🎤、去标签）。"""
     return strip_tags(body(bubble))
+
+
+def estimate_ms(script: str) -> int:
+    """占位语音条上的秒数：中文一秒约 4.5 个字、英文一秒约 2.7 个词，加半秒起头；音频标签不算（跟 Lite 的 VoiceNoteLength 一样）。"""
+    plain = _TAG.sub(" ", script)
+    han = sum(1 for ch in plain if "\u4e00" <= ch <= "\u9fff")
+    words = len(re.findall(r"[^\W\d_]+|\d+", re.sub(r"[\u4e00-\u9fff]", " ", plain)))
+    return max(1000, int((han / 4.5 + words / 2.7 + 0.5) * 1000))
+
+
+def lazy_public(bubble: str) -> dict:
+    """还没念的语音条：编号按稿子的指纹（事件流里和翻历史时是同一个），App 点了再去念。"""
+    b = body(bubble)
+    return {"id": "n" + text_sha(b)[:20], "duration_ms": estimate_ms(b), "lazy": True}
+
+
+async def can_speak(deps, account: UUID, chars: int = 0) -> bool:
+    """这个账号现在能不能念：有钥匙；用我们的钥匙的还得剩够字。不能的话语音条直接当文字发。"""
+    try:
+        _, own = await engine(deps, account)
+    except VoiceError:
+        return False
+    return own or await quota(deps.pool, account) >= chars + len(DEFAULT_TAG)
 
 
 def fingerprint(text: str, voice_id: str, model: str) -> str:

@@ -77,7 +77,7 @@ struct ChatItem: Identifiable, Hashable {
         var out: [ChatItem] = []
         // 搬家搬来的每段开头一行灰字（10-05）：排在这条最前面（借上一条的最后一格，正常消息用不到第 64 格）
         if let d = m.divider, !d.isEmpty {
-            out.append(ChatItem(id: m.id * slots - 1, messageID: m.id, mine: false, kind: .card("divider"), text: d, at: m.at))
+            out.append(ChatItem(id: m.id * slots - 1, messageID: m.id, mine: false, kind: .card(m.ring != nil ? "callRing" : m.callEnd == true ? "callEnd" : "divider"), text: d, at: m.at))
         }
         var bubbles = m.bubbles ?? [m.text]
         let trans = m.translations.flatMap { $0.count == bubbles.count ? $0 : nil }
@@ -118,7 +118,7 @@ struct ChatItem: Identifiable, Hashable {
         let merged = bubbles.count > room
         if merged { bubbles = Array(bubbles.prefix(room - 1)) + [bubbles.dropFirst(room - 1).joined(separator: "\n\n")] }
         for (i, text) in bubbles.enumerated() {
-            let v = (m.voices ?? []).indices.contains(i) ? m.voices?[i] : nil
+            let v = ((m.voices ?? []).indices.contains(i) ? m.voices?[i] : nil) ?? ((m.lazyVoices ?? []).indices.contains(i) ? m.lazyVoices?[i] : nil)
             // 它画的图（10-15 生图）挂在第一泡上面
             let drawn = i == 0 ? (m.attachments ?? []).filter { $0.kind == "image" } : []
             out.append(ChatItem(id: rowID(message: m.id, slot: bubbleSlot + i), messageID: m.id, mine: false, kind: .text,
@@ -171,6 +171,20 @@ final class ChatStore: ObservableObject {
 
     /// 服务器的消息（按号从小到大），行都从它推出来
     private var messages: [MessageDTO] = []
+
+    /// 这通电话说了什么（挂断那条往前、连着的电话消息；只看已经拉下来的）：(是不是你, 那句)
+    func callLines(endingAt id: Int) -> [(mine: Bool, text: String)] {
+        guard let end = messages.firstIndex(where: { $0.id == id }) else { return [] }
+        let callID = messages[end].callID
+        var out: [(Bool, String)] = []
+        var i = end - 1
+        // 同一通的（带同一个编号）；老的没编号就往前取连着的电话消息
+        while i >= 0, messages[i].call == true, callID == nil || messages[i].callID == callID {
+            out.append((messages[i].role == "user", messages[i].text))
+            i -= 1
+        }
+        return out.reversed()
+    }
     /// 还没被服务器确认的那几句
     private struct Echo {
         let id: Int
@@ -379,9 +393,21 @@ final class ChatStore: ObservableObject {
         guard !fresh.isEmpty else { return }
         messages = (messages + fresh).sorted { $0.id < $1.id }
         // 真身回来了就把对应的回显撤掉：一条真身里的每一句只销一条回显（她连发两句一样的「好～」时不会一起抹掉）
+        // 带图 / 表情包的回显按附件对（10-31 内测：表情包连发、或者发完紧接着打字，几句并成一条真身，
+        // 没字的那张回显对不上任何一句，一直叠在最下面，看门狗还拿它重发；大退才没）
         for m in fresh where m.role == "user" {
+            let files = Set((m.attachments ?? []).map(\.id))
+            var captions: [String] = []             // 跟着图一起销掉的那句字，下面按字对的时候别再销别的回显
+            while !files.isEmpty, let i = echoes.firstIndex(where: {
+                !$0.attachments.isEmpty && $0.attachments.allSatisfy { files.contains($0.id) } }) {
+                let slot0 = ChatItem.rowID(message: m.id, slot: 0)
+                if aliases[slot0] == nil { aliases[slot0] = echoes[i].id }
+                if !echoes[i].text.isEmpty { captions.append(echoes[i].text) }
+                echoes.remove(at: i)
+            }
             for (slot, part) in (m.bubbles ?? [m.text]).enumerated() {
-                if let i = echoes.firstIndex(where: { $0.text == part }) {
+                if let c = captions.firstIndex(of: part) { captions.remove(at: c); continue }
+                if let i = echoes.firstIndex(where: { $0.attachments.isEmpty && $0.text == part }) {
                     aliases[ChatItem.rowID(message: m.id, slot: slot)] = echoes[i].id
                     echoes.remove(at: i)
                 }
@@ -697,7 +723,7 @@ final class ChatStore: ObservableObject {
             rebuild()
         case "bubble":
             live.append(ChatItem(id: nextLocalID(), messageID: nil, mine: false, speaker: ev.speaker, kind: .text,
-                                 text: ev.text ?? "", at: Date(), voice: ev.voice, translation: ev.translation))
+                                 text: ev.text ?? "", at: Date(), voice: ev.voice ?? ev.lazyVoice, translation: ev.translation))
             typing = false               // 同一次刷新里：三个点直接换成正文
             rebuild()
         case "inner_voice":              // 心声（10-11）：这一轮说完了才到，排最后

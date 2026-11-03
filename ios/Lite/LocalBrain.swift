@@ -277,6 +277,99 @@ final class LocalBrain: @unchecked Sendable {
         lock.withLock { r.running = task }
     }
 
+    // MARK: 电话（10-31 Aporia）：同一个聊天窗口，你那句标〔电话〕；不进等候区，停嘴就跑；它边写边把句子交给通话页去念
+
+    /// 电话里说完一句：存下（标 call）→ 跑一轮。上一轮还在跑（打字那边的、或者被打断还没收尾的）先等它收完
+    func callTurn(_ conv: String, text: String, link: CallLink) async {
+        guard let comp = host.companion(ofConversation: conv) else { link.fail(String(localized: "没有这个窗口")); return }
+        let r = room(conv)
+        let prev = lock.withLock { r.running }
+        await prev?.value
+        let task = Task { [weak self] in
+            guard let self else { return }
+            let m = self.host.store.addMessage(conv, role: "user", text: text, extra: ["call": true, "call_id": link.callID])
+            link.userMessageID = m["id"] as? Int
+            _ = await self.runTurn(conv, comp: comp, images: [], group: nil, call: link)
+        }
+        lock.withLock { r.running = task }
+        await task.value
+        let again = lock.withLock { () -> Bool in
+            if r.running == task { r.running = nil }
+            return r.running == nil && (!r.pending.isEmpty || !r.files.isEmpty)
+        }
+        if again { flush(conv) }
+    }
+
+    /// TA 打来的电话你接起来了（第 4 步）：不存你说的话，递一句旁白让它先开口（照 poke 的意思）
+    func callAnswered(_ conv: String, reason: String, link: CallLink) async {
+        guard let comp = host.companion(ofConversation: conv) else { link.fail(String(localized: "没有这个窗口")); return }
+        let st = comp["settings"] as? [String: Any] ?? [:]
+        let zh = (st["lang"] as? String ?? "zh") == "zh"
+        let nudge = CallSpeech.answeredNudge(zh: zh, pronoun: Self.pronoun(st, zh: zh), reason: reason)
+        let r = room(conv)
+        let prev = lock.withLock { r.running }
+        await prev?.value
+        let task = Task { [weak self] in
+            guard let self else { return }
+            _ = await self.runTurn(conv, comp: comp, images: [], nudge: nudge, group: nil, call: link)
+        }
+        lock.withLock { r.running = task }
+        await task.value
+        let again = lock.withLock { () -> Bool in
+            if r.running == task { r.running = nil }
+            return r.running == nil && (!r.pending.isEmpty || !r.files.isEmpty)
+        }
+        if again { flush(conv) }
+    }
+
+    /// TA 打来没接通（未接 / 拒绝 / TA 撤回）：聊天里一行灰字，正文是给它的纸条，下一轮它看得到
+    func ringEnded(_ conv: String, callID: String, ring: CallSpeech.Ring) async {
+        let st = host.companion(ofConversation: conv)?["settings"] as? [String: Any] ?? [:]
+        let zh = (st["lang"] as? String ?? "zh") == "zh"
+        host.store.addMessage(conv, role: "user", text: CallSpeech.ringNote(ring, zh: zh, pronoun: Self.pronoun(st, zh: zh)),
+                              extra: ["ring": ring.rawValue, "call_id": callID, "divider": CallSpeech.ringLine(ring, zh: zh)])
+        emit(conv, ["type": "done"])
+    }
+
+    static func pronoun(_ settings: [String: Any], zh: Bool) -> String {
+        switch settings["user_pronoun"] as? String {
+        case "she": zh ? "她" : "she"
+        case "he": zh ? "他" : "he"
+        default: zh ? "TA" : "they"
+        }
+    }
+
+    /// 它写完了、还没念完就被你打断（10-31 自测：三句都存进去了，你只听到第一句）：存档改成只留念出来的，末尾「——」
+    func callTrim(_ conv: String, message id: Int, spoken: [String]) {
+        var list = host.store.messages(conv)
+        guard let i = list.firstIndex(where: { ($0["id"] as? Int) == id }), list[i]["call"] as? Bool == true else { return }
+        let said = spoken.joined(separator: "\n")
+        guard !said.isEmpty else { list.remove(at: i); host.store.saveMessages(conv, list); return }
+        list[i]["text"] = said + "——"
+        list[i]["cut"] = true
+        host.store.saveMessages(conv, list)
+    }
+
+    /// 准确的字回来了（转写比 1.5 秒慢的那次）：把存档里手机识别的那句换掉
+    func callFix(_ conv: String, message id: Int, text: String) {
+        var list = host.store.messages(conv)
+        guard let i = list.firstIndex(where: { ($0["id"] as? Int) == id }), list[i]["call"] as? Bool == true,
+              !text.isEmpty else { return }
+        list[i]["text"] = text
+        host.store.saveMessages(conv, list)
+    }
+
+    /// 挂了：聊天里多一行「📞 通话时长 03:21」，正文是递给它的纸条（不然挂了以后你打的字它还当电话、用电话腔回）
+    func callEnded(_ conv: String, seconds: Int, callID: String) async {
+        let r = room(conv)
+        await lock.withLock({ r.running })?.value          // 被挂断的那一轮先收完，纸条排在它后面
+        let zh = ((host.companion(ofConversation: conv)?["settings"] as? [String: Any])?["lang"] as? String ?? "zh") == "zh"
+        host.store.addMessage(conv, role: "user", text: CallSpeech.hangUpNote(seconds: seconds, zh: zh),
+                              extra: ["call_end": true, "call_id": callID, "seconds": seconds,
+                                      "divider": CallSpeech.durationLine(seconds: seconds, zh: zh)])
+        emit(conv, ["type": "done"])                        // 聊天页补拉一次
+    }
+
     // MARK: 跑一轮
 
     /// 私聊跑一轮；群走 runGroup
@@ -426,7 +519,7 @@ final class LocalBrain: @unchecked Sendable {
     /// 替 comp 在 conv 里跑一轮（群里 group 不为空）。返回它有没有说话
     @discardableResult
     private func runTurn(_ conv: String, comp: [String: Any], images: [String], nudge: String? = nil, peek: String? = nil,
-                         group: GroupCtx?) async -> Bool {
+                         group: GroupCtx?, call: CallLink? = nil) async -> Bool {
         let settings = comp["settings"] as? [String: Any] ?? [:]
         let zh = (settings["lang"] as? String ?? "zh") == "zh"
         let cidSelf = comp["id"] as? String ?? ""
@@ -439,6 +532,7 @@ final class LocalBrain: @unchecked Sendable {
         }
         say(["type": "typing"])
         guard let (routed, key) = host.route(for: comp) else {
+            call?.fail(zh ? "还没给 TA 配 key，打不了电话" : "No key yet, so no call")
             say(["type": "error", "kind": "no_key",
                         "message": zh ? "还没给 TA 配 key：去 Me →「钥匙串」加一把你自己的，再在 TA 的设定里选上。"
                                       : "No key yet: add your own in Me → Keys, then pick it in their settings."])
@@ -450,9 +544,10 @@ final class LocalBrain: @unchecked Sendable {
         // 没选 = 手写独白（10-04 Aporia）：Claude / Gemini 只给第三人称的思考摘要、GPT 走这条接口不给思考、DeepSeek 原生的是分析腔，
         // 想看 TA 心里话哪家都得写独白；想看模型自己那段的，在高级里选「模型自己的思考」
         let mode = (settings["thinking_mode"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "monologue"
-        let monologue = (settings["thinking"] as? Bool ?? true) && mode == "monologue"
+        // 电话里（10-31）：手写独白、模型自己的思考都关掉，开口要快
+        let monologue = call == nil && (settings["thinking"] as? Bool ?? true) && mode == "monologue"
         var provider = routed
-        if monologue { provider.thinking = false }
+        if monologue || call != nil { provider.thinking = false }
         // 看图（10-15）：TA 的模型看不见图时，这一轮发的照片先交给看图钥匙写描述（存在附件上，以后的历史里也用它）
         let sees = provider.seesImages
         if !sees {
@@ -535,6 +630,8 @@ final class LocalBrain: @unchecked Sendable {
             var text = ($0["role"] as? String) == "user" ? Bilingual.userSide($0["text"] as? String ?? "", $0["translations"] as? [Any])
                                                           : $0["text"] as? String ?? ""
             if ($0["role"] as? String) == "assistant", group == nil { text = Monologue.spokenOnly(text, pronoun: leakPronoun, zh: zh) }
+            if ($0["role"] as? String) == "user", $0["call"] as? Bool == true { text = CallSpeech.tag(zh: zh) + text }   // 电话里说的（10-31）
+            if ($0["role"] as? String) == "assistant", $0["cut"] as? Bool == true { text += "\n" + CallSpeech.cutNote(zh: zh) }   // 念到一半被打断
             if let id = lastMonoID, ($0["id"] as? Int) == id, let mono = $0["thinking"] as? String {
                 text = Monologue.wrap(mono.trimmingCharacters(in: .whitespacesAndNewlines), zh: zh) + "\n\n" + text
             }
@@ -568,16 +665,24 @@ final class LocalBrain: @unchecked Sendable {
         if let i = joinNoteAt { history.insert(Message(role: .user, text: GroupChat.joinNote(zh: zh), at: group?.joinedAt ?? Date()), at: i) }
         // 一段脑子（10-11）：别的房间最近 N 条按时间插进来；无痕、小号窗口不合
         let convRec = host.store.conversation(conv)
+        var roomNote = ""
         if (convRec?["incognito"] as? Bool) != true, convRec?["alt"] == nil {
             let limit = max(0, min(100, settings["other_rooms_count"] as? Int ?? 30))
-            history = RoomTimeline.merge(history, others: LocalGroups.otherRooms(host.store, companion: cidSelf, except: conv, limit: limit,
-                                                                                 userName: uname, zh: zh), limit: limit)
+            let others = LocalGroups.otherRooms(host.store, companion: cidSelf, except: conv, limit: limit, userName: uname, zh: zh)
+            history = RoomTimeline.merge(history, others: others, limit: limit)
+            if limit > 0, !others.isEmpty {
+                roomNote = RoomTimeline.note(here: group.map { RoomTimeline.groupRoom($0.name, zh: zh) } ?? RoomTimeline.privateRoom(zh: zh), zh: zh)
+            }
         }
         if group != nil, history.last?.role == .assistant {
             history.append(Message(role: .user, text: zh ? "（轮到你了）" : "(Your turn.)", at: Date()))
         }
         if let nudge { history.append(Message(role: .user, text: nudge, at: Date())) }
-        let contact = Self.contact(comp, provider: provider)
+        var contact = Self.contact(comp, provider: provider)
+        if call != nil {            // 电话里不写长文（线下模式那套场景、动作描写）
+            contact.mode = .online
+            contact.offlineLife = settings["offline_life"] as? Bool == true
+        }
         // 小号窗口：同一个人设，它把你当成另一个人（名字 / 关于你 / 关系都换成这个窗口的）
         let altInfo = host.store.conversation(conv)?["alt"] as? [String: Any]
         let identity = altInfo.map {
@@ -598,6 +703,12 @@ final class LocalBrain: @unchecked Sendable {
                                budgetChars: LocalEcho.historyCap)
         let extra = Self.injections(settings, recent: history.suffix(4).map(\.text).joined(separator: "\n"), turn: stored.count)
         if !extra.isEmpty { req.context += "\n\n" + extra }          // 每轮变的都进 context（缓存，10-04）
+        // 表情包（10-31）：库大的时候系统提示里只有短目录，这里按刚聊的两句挑几张最搭的、给完整描述（电话里不发）
+        let stickerMenu = StickerMenu(stickers)
+        if call == nil {
+            let fits = stickerMenu.picksBlock(stickerMenu.picks(for: history.suffix(2).map(\.text)), zh: zh)
+            if !fits.isEmpty { req.context += "\n\n" + fits }
+        }
         if group == nil, host.store.conversation(conv)?["incognito"] as? Bool != true {   // 偶尔想起（10-14）：隔几轮随手抽一条梗，它自己也会用
             let occ = LocalRooms.occasionalLore(host.store, companion: comp["id"] as? String ?? "", conversation: conv, msgCount: stored.count, zh: zh)
             if !occ.isEmpty { req.context += "\n\n" + occ }
@@ -623,7 +734,7 @@ final class LocalBrain: @unchecked Sendable {
         // 记忆库（用户接的 MCP，10-04）：新对话先 wake，每轮拿刚说的 recall；无痕、小号不碰（记的是平常的你）
         let incognito = (host.store.conversation(conv)?["incognito"] as? Bool ?? false) || altInfo != nil
         // 声音（10-04）：有自己的 ElevenLabs key、没关、不是无痕，才告诉它可以发语音条
-        let voiceOn = !(host.store.conversation(conv)?["incognito"] as? Bool ?? false) && LocalVoice.key(host) != nil
+        let voiceOn = call == nil && !(host.store.conversation(conv)?["incognito"] as? Bool ?? false) && LocalVoice.key(host) != nil
             && (settings["voice_mode"] as? String ?? "sometimes") != "off"
         let voiceLines = LocalVoice.modeLines(settings, hasKey: voiceOn, zh: zh)
         if !voiceLines.isEmpty { req.system += "\n\n" + voiceLines }
@@ -655,6 +766,7 @@ final class LocalBrain: @unchecked Sendable {
         var hiding: Set<String> = []
         if !LocalMap.lifeOn(host.store, cidNow) { hiding.insert("go_to") }       // 没有自己的一天就没地方可挪
         if LocalMedia.imageRoute(host) == nil || incognito { hiding.insert("draw") }  // 没挑画图钥匙就没有 draw
+        if call != nil || group != nil || incognito { hiding.insert(LocalTools.phoneCall) }   // 打电话（10-31）：电话里、群里、无痕不打
         if box.memory != nil, LocalMCP.owner(settings, "memory_people") == "remote" { hiding.insert("person_save") }
         if box.memory != nil, LocalMCP.owner(settings, "memory_dates") == "remote" { hiding.insert("date_add") }
         if let group {
@@ -671,32 +783,33 @@ final class LocalBrain: @unchecked Sendable {
         // 说明书（10-08 Aporia：开关，默认开）：讲清每轮递来的小纸条是什么；接了记忆库再加怎么记事；线上再补几条说话的
         if settings["full_handbook"] as? Bool ?? true {
             let mem = box.memory.map { (remember: MCPToolNames.exposed($0.slug, "remember"), search: MCPToolNames.exposed($0.slug, "search")) }
-            req.system += "\n\n" + Handbook.text(zh: zh, online: contact.mode == .online, life: contact.offlineLife ?? false, memoryTools: mem)
+            req.system += "\n\n" + Handbook.text(zh: zh, online: contact.mode == .online, life: contact.offlineLife ?? false, memoryTools: mem,
+                                                 bare: contact.bare == true)
         }
         if !box.specs.isEmpty {
             req.system += zh ? "另外还有用户接进来的工具（名字带前缀），描述里写了来自哪里。"
                              : " There are also tools the user connected (prefixed names); each description says where it comes from."
         }
-        let pronoun: String = switch settings["user_pronoun"] as? String {
-        case "she": zh ? "她" : "she"
-        case "he": zh ? "他" : "he"
-        default: zh ? "TA" : "they"
-        }
+        let pronoun = Self.pronoun(settings, zh: zh)
         let personaRaw = comp["persona"] as? [String: Any] ?? [:]
         let custom = !((personaRaw["imported"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                        && (personaRaw["personality"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         if monologue {
             // 10-08：照服务器的整份独白规矩 + Aporia写的出厂思考风格 + 范文（之前本机只有三行简化版，独白又短又在排练回复）
+            // 本体化（11-03）：我们的思考风格、范文不放，用户自己写的照用；自己写的范文（11-03）换掉我们那两段
             req.system += "\n\n" + Monologue.rules(zh: zh, pronoun: pronoun, style: settings["thinking_style_text"] as? String ?? "",
-                                                   userName: identity.userName, character: custom ? contact.name : "")
+                                                   userName: identity.userName, character: custom ? contact.name : "",
+                                                   bare: contact.bare == true, examples: settings["monologue_examples"] as? String ?? "")
         }
-        let innerOn = settings["inner_voice"] as? Bool ?? false     // 回复后的心声（10-11）：规矩常驻 system，钩子压最后
+        let innerOn = call == nil && settings["inner_voice"] as? Bool ?? false     // 回复后的心声（10-11）：规矩常驻 system，钩子压最后；电话里不写
         if innerOn {
-            req.system += "\n\n" + InnerVoice.rules(zh: zh, pronoun: pronoun, style: settings["inner_voice_style"] as? String ?? "")
+            req.system += "\n\n" + InnerVoice.rules(zh: zh, pronoun: pronoun, style: settings["inner_voice_style"] as? String ?? "",
+                                                    bare: contact.bare == true)
         }
         // 搬家笔记（10-05，没接记忆库时从 ChatGPT / Claude 搬来的那段）：不变的，放账本前面
         let moved = LocalImport.notesBlock(comp, zh: zh)
         if !moved.isEmpty { req.system += "\n\n" + moved }
+        if !roomNote.isEmpty { req.system += "\n\n" + roomNote }
         // 回声账本放 system 最后（10-05 对照服务器：壹层不变的在前、账本在后），卷一次只动尾巴
         let echo = LocalEcho.render(host.store, conversation: conv, zh: zh, userName: identity.userName, me: group == nil ? nil : selfName,
                                     pronoun: leakPronoun)
@@ -712,19 +825,29 @@ final class LocalBrain: @unchecked Sendable {
             notes += LocalNotes.peopleLines(host.store, companion: cidNow, conversation: conv, text: lastUser, zh: zh)
         }
         for line in notes where !line.isEmpty { req.context += "\n\n" + line }
-        req.context += "\n\n" + LocalNotes.anchor(contact.name, zh: zh,
-                                                 short: contact.mode == .online && (contact.talkRules ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)      // 人设锚：离它开口最近的一行
-        let sentinelLines = Self.sentinels(settings, zh: zh, monologue: monologue, pronoun: pronoun, userName: identity.userName,
+        if contact.bare != true {        // 人设锚：离它开口最近的一行；本体化不放
+            req.context += "\n\n" + LocalNotes.anchor(contact.name, zh: zh,
+                                                     short: contact.mode == .online && (contact.talkRules ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        var sentinelSettings = settings     // 本体化：我们的思考风格不贴，用户自己写的照贴
+        if contact.bare == true, (settings["thinking_style_text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            var on = settings["sentinels"] as? [String: Any] ?? [:]
+            on["thinking_style"] = false
+            sentinelSettings["sentinels"] = on
+        }
+        let sentinelLines = Self.sentinels(sentinelSettings, zh: zh, monologue: monologue, pronoun: pronoun, userName: identity.userName,
                                            character: custom ? contact.name : "", provider: provider, memory: box.memory,
                                            messages: host.store.messages(conv))
         for line in sentinelLines { req.context += "\n\n" + line }
         if innerOn { req.context += "\n\n" + InnerVoice.hook(zh: zh, pronoun: pronoun) }
-        if LocalBilingual.active(settings, group: group != nil) { req.context += "\n\n" + LocalBilingual.rule(settings, zh: zh) }      // 思考风格压在最后、离它开口最近（照服务器 tail）
+        if call == nil, LocalBilingual.active(settings, group: group != nil) { req.context += "\n\n" + LocalBilingual.rule(settings, zh: zh) }      // 思考风格压在最后、离它开口最近（照服务器 tail）
         // 隔了很久才说的这一句（10-20 内测截图：一点五十五聊完吃饭，15:58 她说「五点来接我老公」，DeepSeek 回的还是一点五十五那句——
         // Lite 的附加说明全挂在她那句后面，一长串下来她真正刚说的反而离它开口最远）：告诉它过了多久，再把这一句贴在最后
         if group == nil, let gap = Self.gapLine(stored, pronoun: pronoun, zh: zh) { req.context += "\n\n" + gap }
         // 独白的提醒压在最最后（10-12：之前排在饮食 / 人物卡 / 人设锚前面，一长就被盖住，一会写一会不写）
         if monologue { req.context += "\n\n" + Monologue.hook(zh: zh, pronoun: pronoun) }
+        // 电话（10-31）：只在通话时塞的说明，压在最后、离它开口最近；不进 system，挂了就撤、缓存不动
+        if call != nil { req.context += "\n\n" + CallSpeech.rules(zh: zh, pronoun: pronoun) }
         var text = "", thinking = ""
         var rounds: [String] = []                       // 每个工具来回各说的那段（10-20：独白要一段一段切，见下面）
         var cards: [[String: Any]] = []
@@ -733,6 +856,7 @@ final class LocalBrain: @unchecked Sendable {
         let cid = comp["id"] as? String ?? ""
         var gaugeNoted = false
         var retriedEmpty = false, retriedNoMono = false, retriedNoTag = false, usedTools = false
+        var rang = false                                // 它打了电话、在响（10-31）：这一轮到此为止，等 TA 接
         let retag = settings["monologue_retry"] as? Bool ?? false     // 没打标记重写一次（10-26 Aporia：多花一次钱，默认关）
         // 记新记忆前问一句「是不是跟旧的同一件事」（10-12）：用同一把 key，不想事、只回编号
         let small = host.route(chore: "dedupe", else: (provider, key)) ?? (provider, key)   // 小判断用勾的钥匙（10-15）
@@ -748,12 +872,13 @@ final class LocalBrain: @unchecked Sendable {
             return out
         }                        // 只写了独白 / 什么都没说就停了：再叫一次（只一次，照服务器 09-27）
         do {
-            for _ in 0..<(box.specs.isEmpty ? 4 : 6) {
+            rounds: for _ in 0..<(box.specs.isEmpty ? 4 : 6) {
                 var said = "", calls: [ToolCall] = [], raw: String?
                 for try await e in makeClient(provider, key: key).stream(req) {
+                    if call?.isCut == true { break }           // 电话里她开口了 / 挂了：不往下写了
                     switch e {
                     case .thinking(let t): thinking += t
-                    case .text(let t): said += t
+                    case .text(let t): said += t; call?.feed(t)      // 电话：边写边切句子，第一句写完就去合成
                     case .toolCall(let c): calls.append(c)
                     case .assistantRaw(let r): raw = r
                     case .done(let u):                         // 水位：只记这一轮第一次（没算工具来回）
@@ -761,6 +886,10 @@ final class LocalBrain: @unchecked Sendable {
                     }
                 }
                 if let p = req.assistantPrefix, !said.isEmpty { said = p + said }      // 补叫时替它填好的开头，接回去
+                if let call {
+                    call.flush()                                // 调工具前那句「等我查一下」先念出来
+                    if call.isCut { if !said.isEmpty { text += (text.isEmpty ? "" : "\n\n") + said }; break rounds }
+                }
                 // 没走工具接口、把调用写成了文字（10-15 内测：<function_calls><invoke name="memory_recall">… 原样进了气泡）：
                 // 文字删掉；是它有的工具就替它真调一次，跟正常调用一样把结果还回去
                 if calls.isEmpty {
@@ -820,6 +949,7 @@ final class LocalBrain: @unchecked Sendable {
                         if let aid { drawn.append(aid) }
                     } else { out = await LocalTools.run(c, host: host, companion: cid, conversation: conv, zh: zh) }
                     results.append(ToolResult(id: c.id, name: c.name, content: out.result))
+                    if out.endTurn { rang = true }
                     if c.name == "relationship", out.result.hasPrefix("改好了") { say(["type": "relationship"]) }   // 名字旁的图标换一下（照服务器，不挂卡）
                     if let card = out.card {
                         cards.append(card)
@@ -835,10 +965,12 @@ final class LocalBrain: @unchecked Sendable {
                     results[results.count - 1].content += zh ? "\n（你调工具前写的那段话 TA 会看到，不用再说一遍；接着说新的就好。）"
                         : "\n(They'll see what you wrote before calling the tool — no need to say it again; just go on with anything new.)"
                 }
+                if rang { break rounds }                        // 电话打出去了：不再往下写，等 TA 接
                 req.turns.append(ChatTurn(role: .assistant, text: said, toolCalls: calls, raw: raw))
                 req.turns.append(ChatTurn(role: .user, text: "", toolResults: results))
             }
         } catch {
+            call?.fail(Self.say(error as? LLMError ?? .network, zh: zh))
             // 装不下了（模型窗口比记性长度小，10-14）：卷账本只在一轮成功之后，不先卷就每句都报这个错。先卷，再请 TA 重发
             if group == nil, LocalEcho.tooLong(error), await LocalEcho.rollNow(host, conversation: conv) {
                 say(["type": "error", "kind": "llm", "message": zh ? "这段聊天太长，模型装不下了。前面的已经卷进账本，再发一次就好。"
@@ -851,7 +983,7 @@ final class LocalBrain: @unchecked Sendable {
             return false
         }
 
-        if group == nil, Date().timeIntervalSince(started) > Self.staleTurnSeconds {
+        if group == nil, call == nil, Date().timeIntervalSince(started) > Self.staleTurnSeconds {
             NSLog("[turn] 这一轮跑了 \(Int(Date().timeIntervalSince(started))) 秒，中间被挂起过：回复作废，按现在重来")
             lock.withLock { _ = staleConvs.insert(conv) }
             say(["type": "done"])
@@ -880,13 +1012,30 @@ final class LocalBrain: @unchecked Sendable {
         (text, innerVoiceText) = InnerVoice.split(text)
         if !innerOn { innerVoiceText = "" }
         if group != nil { text = GroupChat.stripOwnLabel(text, name: selfName) }
+        text = RoomTimeline.stripTag(text)
         let parsed = Markers.parse(text)
         let thinkingMs = Int((Date().timeIntervalSince(started) * 1000).rounded())
+        // 电话（10-31）：存的是念出来的那几句（一句一行）；被她打断的只存念到的，末尾一个「——」让它知道话被截了
+        if let call {
+            call.flush()
+            var said = (call.spokenLines ?? call.lines).joined(separator: "\n")
+            if call.isCut, !said.isEmpty { said += "——" }
+            if !said.isEmpty || !cards.isEmpty {
+                let m = host.store.addMessage(conv, role: "assistant", text: said, cards: cards,
+                                              extra: call.isCut && !said.isEmpty ? ["call": true, "cut": true, "call_id": call.callID]
+                                                                                  : ["call": true, "call_id": call.callID])
+                call.assistantMessageID = m["id"] as? Int
+            }
+            if said.isEmpty, cards.isEmpty, !call.isCut { call.fail(zh ? "\(contact.name) 没说出话来" : "\(contact.name) didn't say anything") }
+            say(["type": "done"])
+            LocalEcho.maybeRoll(host, conversation: conv)
+            return !said.isEmpty
+        }
         if !thinking.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             say(["type": "thinking", "text": thinking, "ms": thinkingMs])
         }
         for want in parsed.stickers {
-            guard let s = LocalRooms.matchSticker(host.store, want) else { continue }
+            guard let s = stickerMenu.resolve(want).flatMap({ Int($0.id) }) else { continue }
             let card: [String: Any] = ["kind": "sticker", "text": zh ? "发了一张表情包" : "Sent a sticker", "data": ["sticker_id": s]]
             cards.append(card)
             say(["type": "card", "kind": "sticker", "text": card["text"]!, "private": false, "data": ["sticker_id": s]])
@@ -921,7 +1070,6 @@ final class LocalBrain: @unchecked Sendable {
             }
         }
         func tr(_ i: Int) -> [String: Any] { trans.indices.contains(i) && trans[i] != nil ? ["translation": trans[i]!] : [:] }
-        var clips: [String: Any] = [:]
         for (i, b) in bubbles.enumerated() {
             if i > 0 {
                 say(["type": "typing"])
@@ -932,16 +1080,10 @@ final class LocalBrain: @unchecked Sendable {
                 await notifyIfAway(conv, companion: cid, name: group.map { "\(contact.name) · \($0.name)" } ?? contact.name, text: b, group: group != nil)      // 切走了：一个气泡一条通知（像微信）
                 continue
             }
-            // 语音条：念出来挂上；关着 / 无痕 / 没 key / 念不成 → 当文字发，存档里那段也改成文字
-            let near = { (j: Int) -> String? in bubbles.indices.contains(j) ? LocalVoice.asText(bubbles[j]) : nil }
-            var clip: [String: Any]?
+            // 语音条（10-31 起按需念）：先落一个占位的语音条，TA 点了才合成（念过的挂上 voice_clips，再点不花钱）；
+            // 关着 / 无痕 / 没 key → 当文字发，存档里那段也改成文字
             if voiceOn {
-                clip = try? await LocalVoice.speak(host, text: LocalVoice.body(b), voiceID: LocalVoice.voiceID(settings),
-                                                   prev: near(i - 1), next: near(i + 1))
-            }
-            if let clip {
-                clips[LocalVoice.sha(LocalVoice.body(b))] = clip
-                say(["type": "bubble", "text": LocalVoice.asText(b), "voice": clip].merging(tr(i)) { a, _ in a })
+                say(["type": "bubble", "text": LocalVoice.asText(b), "lazy_voice": LocalVoice.lazyRef(b)].merging(tr(i)) { a, _ in a })
             } else {
                 if let r = finalText.range(of: b) { finalText.replaceSubrange(r, with: LocalVoice.asText(b)) }
                 say(["type": "bubble", "text": LocalVoice.asText(b)].merging(tr(i)) { a, _ in a })
@@ -955,17 +1097,12 @@ final class LocalBrain: @unchecked Sendable {
             say(["type": "inner_voice", "text": innerVoiceText])
         }
         if !finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !cards.isEmpty || !drawn.isEmpty {
-            let saved = host.store.addMessage(conv, role: "assistant", text: finalText, thinking: thinking, thinkingMs: thinkingMs, cards: cards,
+            _ = host.store.addMessage(conv, role: "assistant", text: finalText, thinking: thinking, thinkingMs: thinkingMs, cards: cards,
                                              attachments: drawn, innerVoice: innerVoiceText, speaker: group == nil ? nil : cidSelf,
                                              translations: trans)
-            if !clips.isEmpty, let mid = saved["id"] as? Int, let (c, idx) = host.store.locate(message: mid) {
-                var list = host.store.messages(c)
-                list[idx]["voice_clips"] = clips
-                host.store.saveMessages(c, list)
-            }
             if group == nil { LocalBooks.catchReply(host.store, conversation: conv, companion: cid, text: finalText) }
         }
-        if group == nil, finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, cards.isEmpty {
+        if group == nil, !rang, finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, cards.isEmpty {
             // 补叫一次还是没开口：别悄悄没了，告诉 TA 一声（10-12）
             say(["type": "error", "kind": "llm", "message": zh ? "\(contact.name) 想了一会儿没说出话来，再发一次试试。" : "\(contact.name) didn't manage to reply. Try sending again."])
         }
@@ -1026,20 +1163,10 @@ final class LocalBrain: @unchecked Sendable {
         }
     }
 
-    /// 信的正文去掉标记：⟪里程碑：…⟫ / 《里程碑：…》 / [表情包：…] / ⟪想查手机：…⟫
+    /// 信的正文去掉标记：⟪里程碑：…⟫ / 《里程碑：…》 / [表情包：…] / ⟪想查手机：…⟫，写坏了的也剥（10-31 跟聊天同一道）
     static func cleanLetter(_ text: String) -> (String, [String]) {
-        var stones: [String] = []
-        let pattern = "[⟪《<〈]\\s*(里程碑|milestone|想查手机|peek)\\s*[:：]\\s*([^⟫》>〉\\n]+?)\\s*[⟫》>〉]|\\[(表情包|sticker)\\s*[:：][^\\]\\n]*\\]"
-        guard let re = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { return (text, []) }
-        let ns = text as NSString
-        for m in re.matches(in: text, range: NSRange(location: 0, length: ns.length)) where m.range(at: 1).location != NSNotFound {
-            let kind = ns.substring(with: m.range(at: 1)).lowercased()
-            if kind == "里程碑" || kind == "milestone" { stones.append(ns.substring(with: m.range(at: 2))) }
-        }
-        let out = re.stringByReplacingMatches(in: text, range: NSRange(location: 0, length: ns.length), withTemplate: "")
-            .replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return (out, stones)
+        let p = Markers.parse(text)
+        return (p.text, p.milestones)
     }
 
     /// 服务器的联系人 → 零件包的 Contact（人设：导入的卡优先，不然是性格 + 说话方式）
@@ -1048,7 +1175,12 @@ final class LocalBrain: @unchecked Sendable {
         let s = c["settings"] as? [String: Any] ?? [:]
         let zh = (s["lang"] as? String ?? "zh") == "zh"
         var persona = (p["imported"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if persona.isEmpty {     // 性格 / 说话方式空着 = 出厂（10-05：之前本机没有出厂那份，空着就只剩名字）
+        let bare = s["bare_mode"] as? Bool == true
+        if persona.isEmpty, bare {   // 本体化（11-03）：出厂性格 / 说话方式、三个旋钮不放，用户自己写的照放
+            let mine = { (k: String) in (p[k] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
+            persona = [(zh ? "性格：" : "Personality: ", mine("personality")), (zh ? "说话方式：" : "How you talk: ", mine("style"))]
+                .filter { !$0.1.isEmpty }.map { $0.0 + $0.1 }.joined(separator: "\n\n")
+        } else if persona.isEmpty {     // 性格 / 说话方式空着 = 出厂（10-05：之前本机没有出厂那份，空着就只剩名字）
             let mine = { (k: String) in (p[k] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
             let personality = mine("personality").isEmpty ? Self.factory(zh)["personality"]! : mine("personality")
             let style = mine("style").isEmpty ? Self.factory(zh)["style"]! : mine("style")
@@ -1063,7 +1195,8 @@ final class LocalBrain: @unchecked Sendable {
                               persona: persona, mode: (s["long_mode"] as? Bool ?? false) ? .offline : .online, provider: provider)
         contact.offlineLife = s["offline_life"] as? Bool == true || s["long_mode"] as? Bool == true
         contact.talkRules = s["talk_rules"] as? String
-        contact.relationshipPack = Relationship.pack(s["relationship"] as? String ?? "", zh: zh)    // 关系包（10-08 照服务器搬）
+        contact.relationshipPack = Relationship.pack(s["relationship"] as? String ?? "", zh: zh)    // 关系包（10-08 照服务器搬）；本体化时 Prompt 不放
+        contact.bare = bare
         let call = (p["call_user"] as? String ?? "").trimmingCharacters(in: .whitespaces)
         contact.identities[0].userName = call.isEmpty ? (s["user_name"] as? String ?? "") : call
         contact.identities[0].relationship = relationshipText(s["relationship"] as? String ?? "", zh: zh)
@@ -1261,6 +1394,63 @@ final class LocalBrain: @unchecked Sendable {
         }
         let short = msg.count > 160 ? String(msg.prefix(160)) + "…" : msg
         return (zh ? "模型那边出错了：" : "The model returned an error: ") + short
+    }
+}
+/// 一通电话递给大脑的把手（10-31）：切好的句子交给通话页；她开口打断 / 挂了就停；存档只存真念出来的
+final class CallLink: @unchecked Sendable {
+    private let lock = NSLock()
+    private var splitter = CallSpeech.Splitter()
+    private var _cut = false
+    private var _spoken: [String]?
+    private var _lines: [String] = []
+    private var _userMessageID: Int?
+    private var _assistantMessageID: Int?
+    /// 切好一句（已洗过）：通话页拿去合成、排进时间线
+    let onLine: @Sendable (String) -> Void
+    /// 这一轮没成（没 key、模型报错、什么都没说）：通话页显示一句
+    let onFail: @Sendable (String) -> Void
+    /// 这一通电话的编号：同一通的几条消息都带着，点开「通话时长」那行按它取
+    let callID: String
+
+    init(callID: String, onLine: @escaping @Sendable (String) -> Void, onFail: @escaping @Sendable (String) -> Void) {
+        self.callID = callID
+        self.onLine = onLine
+        self.onFail = onFail
+    }
+
+    var isCut: Bool { lock.withLock { _cut } }
+    /// 它这一轮切出来的全部句子
+    var lines: [String] { lock.withLock { _lines } }
+    /// 被打断时通话页告诉的「念到了哪几句」；没打断是 nil
+    var spokenLines: [String]? { lock.withLock { _spoken } }
+    var userMessageID: Int? {
+        get { lock.withLock { _userMessageID } }
+        set { lock.withLock { _userMessageID = newValue } }
+    }
+    /// 它这一轮存下的那条（写完才有）
+    var assistantMessageID: Int? {
+        get { lock.withLock { _assistantMessageID } }
+        set { lock.withLock { _assistantMessageID = newValue } }
+    }
+
+    func feed(_ chunk: String) { emit(lock.withLock { splitter.feed(chunk) }) }
+    /// 已经切好的一句（Host 那边切好推来的）
+    func deliver(_ line: String) { if !line.isEmpty { emit([line]) } }
+    func flush() { emit(lock.withLock { splitter.finish() }) }
+
+    /// 停：spoken = 已经念出来（或正念着）的那几句
+    func cut(spoken: [String]) { lock.withLock { _cut = true; _spoken = spoken } }
+
+    func fail(_ message: String) { onFail(message) }
+
+    private func emit(_ out: [String]) {
+        guard !out.isEmpty else { return }
+        let go = lock.withLock { () -> [String] in
+            guard !_cut else { return [] }
+            _lines += out
+            return out
+        }
+        for l in go { onLine(l) }
     }
 }
 #endif

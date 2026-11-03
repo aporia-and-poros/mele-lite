@@ -222,7 +222,7 @@ final class LocalHost: @unchecked Sendable {
         "humor": "mid", "recall_level": "medium", "careful_read": true, "recall_probe": true, "memory_length": NSNull(),
         "reply_wait": 10, "max_bubbles": 6, "long_mode": false, "thinking": true, "thinking_mode": NSNull(),
         "ledger_same_as_chat": false, "sentinels": ["thinking_style": true, "tool_reminder": true, "remembered": true],
-        "tool_reminder_every": 5, "thinking_style_text": "", "thinking_style_every": 3, "inner_voice": false, "inner_voice_style": "", "monologue_retry": false, "bilingual": false, "bilingual_lang": "English", "bilingual_to": "", "bilingual_by": "key", "injections": [Any](), "patrol_level": "mid",
+        "tool_reminder_every": 5, "thinking_style_text": "", "monologue_examples": "", "bare_mode": false, "thinking_style_every": 3, "inner_voice": false, "inner_voice_style": "", "monologue_retry": false, "bilingual": false, "bilingual_lang": "English", "bilingual_to": "", "bilingual_by": "key", "injections": [Any](), "patrol_level": "mid",
         "heartbeat_on": true, "morning_on": true, "sleep_from": "00:00", "sleep_to": "08:00", "patrol_overrides": [String: Any](),
         "relationship": "", "cache_keepalive": false, "diary_on": true, "offline_life": false, "talk_rules": "", "diary_chars": 600, "voice_mode": "sometimes",
         "full_handbook": true,      // Lite 说明书开关（10-08 Aporia：默认开）
@@ -315,7 +315,7 @@ final class LocalHost: @unchecked Sendable {
     private func syncAdvanced(_ id: String) -> LocalResponse {
         guard let src = store.companion(id)?["settings"] as? [String: Any] else { return .error(404, "") }
         let adv = ["careful_read", "heartbeat_on", "injections", "ledger_same_as_chat", "max_bubbles", "patrol_overrides",
-                   "recall_probe", "reply_wait", "sentinels", "thinking", "thinking_mode", "thinking_style_text", "tool_reminder_every", "full_handbook", "thinking_style_every", "inner_voice", "inner_voice_style", "monologue_retry"]
+                   "recall_probe", "reply_wait", "sentinels", "thinking", "thinking_mode", "thinking_style_text", "monologue_examples", "tool_reminder_every", "full_handbook", "thinking_style_every", "inner_voice", "inner_voice_style", "monologue_retry"]
         var n = 0
         for var c in store.companions where (c["id"] as? String) != id {
             var s = c["settings"] as? [String: Any] ?? [:]
@@ -416,7 +416,8 @@ final class LocalHost: @unchecked Sendable {
     func conversationOut(_ c: [String: Any]) -> [String: Any] {
         let msgs = store.messages(c["id"] as? String ?? "")
         var out = c
-        out["preview"] = String((msgs.last?["text"] as? String ?? "").prefix(40))
+        out["preview"] = msgs.last?["call_end"] as? Bool == true || msgs.last?["ring"] != nil ? (msgs.last?["divider"] as? String ?? "")      // 列表里写「📞 通话时长」，不写纸条
+            : String((msgs.last?["text"] as? String ?? "").prefix(40))
         out["first"] = String((msgs.first?["text"] as? String ?? "").prefix(20))
         out["title"] = c["title"] ?? ""
         return out
@@ -460,7 +461,10 @@ final class LocalHost: @unchecked Sendable {
     func messageOut(_ m: [String: Any], settings: [String: Any]) -> [String: Any] {
         let role = m["role"] as? String ?? "user"
         let text = m["text"] as? String ?? ""
-        let bubbles: [String] = role == "assistant"
+        // 电话挂了那一条（10-31）：正文是递给 TA 的纸条，屏幕上只画 divider 那行「📞 通话时长」
+        // 电话里说的（10-31 Aporia：照微信，聊天里只留一行「📞 通话时长」，点开再看全文）：也不出气泡
+        let inCall = m["call_end"] as? Bool == true || m["call"] as? Bool == true || m["ring"] != nil     // 未接 / 拒绝那行也只画灰字（10-31）
+        let bubbles: [String] = inCall ? [] : role == "assistant"
             ? Bubbles.split(text, cap: settings["max_bubbles"] as? Int ?? 6, offline: settings["long_mode"] as? Bool ?? false)
             : (m["parts"] as? [String] ?? [text])
         let atts = (m["attachments"] as? [String] ?? []).compactMap { attachmentPublic($0) }
@@ -469,13 +473,19 @@ final class LocalHost: @unchecked Sendable {
         let voices: [Any] = bubbles.map { b in
             LocalVoice.isVoice(b) ? (clips[LocalVoice.sha(LocalVoice.body(b))] ?? NSNull()) : NSNull()
         }
+        // 还没念的（10-31 按需念）：并排一列 lazy_voices，App 画成语音条、点了才念；没 key 了就还是文字
+        let canSpeak = role == "assistant" && LocalVoice.key(self) != nil
+        let lazy: [Any] = bubbles.map { b in
+            canSpeak && LocalVoice.isVoice(b) && clips[LocalVoice.sha(LocalVoice.body(b))] == nil ? LocalVoice.lazyRef(b) as Any : NSNull()
+        }
         let shown = bubbles.map { LocalVoice.isVoice($0) ? LocalVoice.asText($0) : $0 }
         return ["id": m["id"] ?? 0, "role": role, "text": text, "thinking": m["thinking"] ?? "",
-                "thinking_ms": m["thinking_ms"] ?? NSNull(), "inner_voice": m["inner_voice"] ?? "", "at": m["at"] ?? "", "bubbles": shown, "voices": voices, "cards": m["cards"] ?? [Any](),
+                "thinking_ms": m["thinking_ms"] ?? NSNull(), "inner_voice": m["inner_voice"] ?? "", "at": m["at"] ?? "", "bubbles": shown, "voices": voices, "lazy_voices": lazy, "cards": inCall ? [Any]() : m["cards"] ?? [Any](),
                 "reaction": m["reaction"] ?? NSNull(), "reactions": Self.perBubble(m, count: shown.count),
                 "attachments": atts, "divider": m["divider"] ?? NSNull(),
                 "translations": (m["translations"] as? [Any]).flatMap { $0.count == shown.count ? $0 : nil } ?? NSNull(),
-                "speaker": m["speaker"] ?? NSNull(), "speaker_name": m["speaker_name"] ?? NSNull()]
+                "speaker": m["speaker"] ?? NSNull(), "speaker_name": m["speaker_name"] ?? NSNull(),
+                "call": m["call"] as? Bool ?? false, "call_end": m["call_end"] as? Bool ?? false, "call_id": m["call_id"] ?? NSNull(), "ring": m["ring"] ?? NSNull()]
     }
 
     private func messages(_ conv: String, _ q: [String: String]) -> LocalResponse {

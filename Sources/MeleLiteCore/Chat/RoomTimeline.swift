@@ -20,6 +20,19 @@ public enum RoomTimeline {
     public static func groupRoom(_ name: String, zh: Bool) -> String { zh ? "群「\(name)」" : "group \"\(name)\"" }
     public static func privateRoom(zh: Bool) -> String { zh ? "私聊" : "DM" }
 
+    /// 合了别的房间时放进系统提示（10-31 内测：群里的话被它接到私聊里回）：告诉它现在在哪、标了房间的是别处的话
+    public static func note(here: String, zh: Bool) -> String {
+        zh ? "〔房间〕你现在在\(here)。历史里开头标着〔群「…」〕〔私聊〕的，是你在别的房间听到、说过的话，放进来只是让你知道那边聊过什么。这里只回这个房间里的话：别接那边的话头，回话开头也不写房间标签。"
+           : "[Room] You're in the \(here) right now. Lines in the history that start with a room tag like 〔group \"…\"〕 or 〔DM〕 are things you heard or said in other rooms — they're there so you know what was said over there. Here, only answer what's said in this room: don't pick up threads from over there, and don't start your reply with a room tag."
+    }
+
+    /// 回话开头学着历史垫的房间标签（〔群「三人行」〕、〔私聊〕…）去掉
+    public static func stripTag(_ text: String) -> String {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let r = t.range(of: #"^〔(群「[^」]*」|私聊|group "[^"]*"|DM)( · [^〕]*)?〕\s*"#, options: .regularExpression) else { return t }
+        return String(t[r.upperBound...])
+    }
+
     /// 别的房间最近 limit 条按时间插进当前历史：TA 自己说的 = assistant「〔房间〕…」，别人说的 = user「〔房间 · 名字〕…」。
     /// 同一时刻当前房间的在前；limit ≤ 0 原样返回
     public static func merge(_ current: [Message], others: [Item], limit: Int) -> [Message] {

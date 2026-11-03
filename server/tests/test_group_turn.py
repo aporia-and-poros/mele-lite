@@ -61,10 +61,13 @@ async def test_private_chat_sees_group_lines(pool):
     await archive.add_message(pool, gid, "user", "群里一句", now=NOW - timedelta(minutes=5))
     await archive.add_message(pool, gid, "assistant", "小满在群里说的", speaker=man, speaker_name="小满",
                               now=NOW - timedelta(minutes=4))
-    m = FakeModel(["嗯"])
+    m = FakeModel(["〔群「三人行」〕嗯"])
     await run_turn(make_deps(pool, m), Scope(acc, ju, dm), "私聊来了", lambda e: _noop(e))
     texts = [x.text for x in m.requests[0].messages]
     assert texts[0] == "〔群「三人行」 · 她〕群里一句\n\n〔群「三人行」 · 小满〕小满在群里说的"
+    # 10-31 内测：群里的话被接到私聊里回——告诉它现在在私聊；它学着垫的房间标签去掉
+    assert "你现在在私聊" in "".join(b.text for b in m.requests[0].system)
+    assert (await archive.recent(pool, dm, 5))[-1].text == "嗯"
     # 关掉就不合
     await archive.save_settings(pool, ju, {**(await archive.get_settings(pool, ju)), "other_rooms_count": 0})
     m2 = FakeModel(["嗯"])

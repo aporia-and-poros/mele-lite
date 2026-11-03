@@ -110,8 +110,9 @@ public final class ChatEngine {
             try? store.append(m, contact: contactID, identity: identityID)
             cont.yield(.bubble(m))
         }
+        let menu = StickerMenu(stickers.all())
         for want in parsed.stickers {
-            guard let s = stickers.match(want) else { continue }
+            guard let s = menu.resolve(want) else { continue }
             let tag = lang == .zh ? "[表情包：\(s.caption)]" : "[sticker: \(s.caption)]"
             let m = Message(role: .assistant, text: tag, thinking: first && !thinking.isEmpty ? thinking : nil, stickerID: s.id, at: now())
             first = false

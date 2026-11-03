@@ -24,6 +24,7 @@ from llm.router import call
 from llm.types import Block, ChatRequest, Msg, Usage, estimate_tokens
 
 from .archive import USER_SIDE, StoredMsg
+from .wake_text import SILENT_DID
 
 log = logging.getLogger(__name__)
 
@@ -223,7 +224,9 @@ def day_transcripts(msgs: list[StoredMsg], tz: str, lang: str, user_name: str = 
     lines: dict[date, list[str]] = {}
     for m in msgs:
         t = m.created_at.astimezone(z)
-        if m.role == "wake":              # 〔醒来〕整段不抄进账，只记一句「我自己醒来找 TA」
+        if m.role == "wake" and m.text.startswith(SILENT_DID[lang]):   # 醒来没找 TA、做了自己的事：照那一行记
+            line = f"[{t:%H:%M}] （{m.text.removeprefix(SILENT_DID[lang]).strip()}）"
+        elif m.role == "wake":            # 〔醒来〕整段不抄进账，只记一句「我自己醒来找 TA」
             line = f"[{t:%H:%M}] {WAKE_LINE[lang]}"
         else:
             who_said = (m.speaker_name or "TA") if group and m.role == "assistant" else \

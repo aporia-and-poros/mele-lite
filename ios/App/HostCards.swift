@@ -15,7 +15,7 @@ enum HostLink {
     static let tipKey = "host.tipShown"
     /// Host 的版本戳（10-13 内测：推送重复修了三版都在 Host 上，测的人只更新过一次 Host，App 更新了也没用，还看不出来）。
     /// 镜像打的时候写进去，样子是 YYYYMMDD-提交号；老镜像没有 → 当旧的。App 要的最低日期在这里，Host 修了要紧的事就往上调
-    static let minHostBuild = "20261027"
+    static let minHostBuild = "20261031"
     private static let buildKey = "host.build"           // "" = 问过了、Host 没报（老镜像）；nil = 还没问过
     static var hostBuild: String? { UserDefaults.standard.string(forKey: buildKey) }
     static var hostOutdated: Bool {

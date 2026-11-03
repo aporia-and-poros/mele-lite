@@ -19,12 +19,24 @@ struct MainTabView: View {
     @State private var confirmLeaveIncognito = false
     @State private var showDrawer = false
     @State private var focusPrefill: FocusPrefill?
+    @State private var feedbackShown = false   // 内测反馈小卡片（11-03）
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(CoachTour.homeKey) private var homeTourPending = false   // 主屏导览没看完前先不冒 Host 提示（两个挤一个位置）
 
     static let slide = Animation.snappy(duration: 0.32)
 
     private var coveredByList: Bool { model.listOpen || model.chat != nil }
+
+    /// 内测反馈（11-03）：记一笔今天；在 3 个不同的日子打开过、又在主屏（不在聊天里、导览看完了）才弹，晚一秒半等主屏站稳
+    private func askFeedbackIfDue() {
+        guard Lite.on else { return }
+        FeedbackGate.noteOpen()
+        guard FeedbackGate.due(), !feedbackShown else { return }
+        Task {
+            try? await Task.sleep(for: .seconds(1.5))
+            if FeedbackGate.due(), !coveredByList, !homeTourPending { withAnimation { feedbackShown = true } }
+        }
+    }
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -49,6 +61,12 @@ struct MainTabView: View {
                     .overlay(alignment: .leading) { edgeHandle($listX, close: closeList) }
                     .transition(.move(edge: .trailing))
                     .zIndex(1)
+            }
+
+            if feedbackShown {
+                FeedbackCard { feedbackShown = false }
+                    .transition(.opacity)
+                    .zIndex(5)
             }
 
             if let target = model.chat {
@@ -76,6 +94,7 @@ struct MainTabView: View {
             // 回前台：报「在」、天气 / 在哪 / 日程 / 步数（开了的那几样）；进后台停掉「在」的钟
             if phase == .active {
                 ContextReporter.shared.foreground(); PushDelegate.clearDelivered()
+                askFeedbackIfDue()
                 Task { await model.refreshWindows() }                       // 不在的时候它可能说过话：列表预览刷新
                 #if LITE
                 if Lite.local { Task { await LocalRooms3.runDueVisits(LocalHost.shared) } }   // 朋友圈：关着的时候欠下的来回（10-18）
@@ -91,11 +110,27 @@ struct MainTabView: View {
             MusicStore.shared.api = model.api
             await MusicStore.shared.load()               // 歌卡要知道 TA 用什么听歌
             ContextReporter.shared.foreground()
+            askFeedbackIfDue()
             if !model.loaded { await model.refresh() }
             #if LITE
             if Lite.local { Task { await LocalRooms3.runDueVisits(LocalHost.shared) } }   // 朋友圈：上次关掉前欠下的来回（10-18）
+            IncomingCalls.shared.model = model              // TA 打来（10-31）：来电页要名字和头像
+            IncomingCalls.shared.api = model.api
+            if Lite.hosted { Task { await HostVoIP.shared.report(api: model.api) } }   // 连着 Host：登记来电用的设备号
             #endif
             await model.greetIfPending()
+            #if DEBUG && LITE
+            // 自测（10-31）：-callSelfTest 直接进第一个 TA 的聊天，聊天页接着打电话
+            if CommandLine.arguments.contains("-callSelfTest"), let c = model.companions.first { await model.openChat(c) }
+            // 自测（10-31 第 4 步）：-ringSelfTest 进第一个 TA 的聊天，递一句旁白让它用 phone_call 打过来
+            if CommandLine.arguments.contains("-ringSelfTest"), let c = model.companions.first {
+                await model.openChat(c)
+                try? await Task.sleep(for: .seconds(1.5))
+                if let conv = model.chat?.conversation.uuidString.lowercased() {
+                    LocalHost.shared.brain.poke(conv, nudge: "〔测试：现在用 phone_call 工具给对方打个语音电话，reason 写一句为什么想打。〕")
+                }
+            }
+            #endif
             if !Lite.local { await PushDelegate.requestAndRegister() }   // 手机里的小管家推不了；连着 Mele Host 就要（10-04）
             await model.reportDevice()
             await HostLink.refreshBuild()                   // Host 是不是旧的（10-13）：Me 的 Host 卡上提醒 mele-host update

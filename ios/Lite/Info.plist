@@ -57,12 +57,19 @@
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>拿你那边的天气，和你不在家时让 TA 知道你在哪（只在打开 App 时看，不记你走过的路）。</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>按住麦克风给 TA 发语音时录音。</string>
+	<string>按住麦克风给 TA 发语音时录音；给 TA 打电话时听你说话。</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>用于从相册选照片发给 TA。</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>给 TA 打电话时，把你正在说的话先变成字显示出来（用 iPhone 自带的语音识别，会经过苹果的识别服务）。</string>
 	<key>UIAppFonts</key>
 	<array>
 		<string>Ballet.ttf</string>
+	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>voip</string>
 	</array>
 	<key>UILaunchScreen</key>
 	<dict/>

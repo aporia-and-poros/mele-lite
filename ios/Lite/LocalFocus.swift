@@ -229,8 +229,8 @@ enum LocalFocus {
 
     static func toolSpec(zh: Bool) -> ToolSpec {
         ToolSpec(name: "offer_focus",
-                 description: zh ? "用途：TA 说要学习 / 干活一段时间时，挂一张带「开始专注」按钮的卡片。TA 点了才开始，开始后 TA 刷分心的 app，手机会弹你写的提醒。别每次都提，TA 想专注的时候再提。"
-                                 : "Purpose: when they say they're about to study / work for a while, put up a card with a \"Start focus\" button. It only starts if they tap it; then if they drift to distracting apps, their phone shows reminders you write. Don't offer every time — only when they want to focus.",
+                 description: zh ? "用途：TA 说要学习 / 干活一段时间时，挂一张带「开始专注」按钮的卡片。TA 点了才开始，开始后 TA 刷分心的 app，手机会弹你写的提醒。别每次都提，TA 想专注的时候再提。锁 App 由开专注时的开关管：TA 选整组立刻锁，或交给你定第几条提醒后锁。这张卡和你手上都没有锁 / 解锁的按钮，你也认不出 TA 选了哪几个 App（苹果只给代号），只能整组一起锁。TA 让你锁这个、留那个，照实说做不到，让 TA 去专注页的开关里选。"
+                                 : "Purpose: when they say they're about to study / work for a while, put up a card with a \"Start focus\" button. It only starts if they tap it; then if they drift to distracting apps, their phone shows reminders you write. Don't offer every time — only when they want to focus. Locking apps is set by the switches when focus starts: they lock the whole set right away, or let you pick after which reminder it locks. Neither this card nor anything else you have can lock or unlock apps, and you can't tell which apps they picked (Apple only gives opaque codes), so it's always the whole set. If they ask you to lock one and spare another, tell them honestly you can't, and point them to the switches on the focus page.",
                  parametersJSON: #"{"type":"object","required":["minutes"],"properties":{"minutes":{"type":"integer","minimum":15,"maximum":600,"description":"多久（分钟，最少 15）"},"label":{"type":"string","description":"在忙什么，几个字（背单词、写论文）"}}}"#)
     }
 

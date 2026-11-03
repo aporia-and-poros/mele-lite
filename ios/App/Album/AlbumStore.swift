@@ -26,6 +26,19 @@ struct AlbumPhotoDTO: Decodable, Identifiable, Hashable {
         case id, source, caption, felt, why, thoughts, note, batch, starred, secret, looking, url, thumb
         case companionID = "companion_id", takenAt = "taken_at"
     }
+
+    /// 字段缺了 / 是 null 就给空：一张解不出来会让整本相册都拉不下来（10-31 内测：Lite 单张的 batch 是 null）
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        func s(_ k: CodingKeys) -> String { (try? c.decodeIfPresent(String.self, forKey: k)) ?? nil ?? "" }
+        func b(_ k: CodingKeys) -> Bool { (try? c.decodeIfPresent(Bool.self, forKey: k)) ?? nil ?? false }
+        id = try c.decode(Int.self, forKey: .id)
+        companionID = try c.decode(UUID.self, forKey: .companionID)
+        takenAt = try c.decode(Date.self, forKey: .takenAt)
+        source = s(.source); caption = s(.caption); felt = s(.felt); why = s(.why); thoughts = s(.thoughts)
+        note = s(.note); batch = s(.batch); url = s(.url); thumb = s(.thumb)
+        starred = b(.starred); secret = b(.secret); looking = b(.looking)
+    }
 }
 
 @MainActor

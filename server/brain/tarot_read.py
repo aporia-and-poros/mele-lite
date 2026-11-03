@@ -132,8 +132,8 @@ async def _read(deps, account: UUID, r: T.Reading, followup: int | None, now: da
     else:
         persona = Persona.from_dict(await archive.get_persona(pool, r.companion_id), lang)
         core = [x.content for x in sorted(await M.list_memories(pool, r.companion_id, kind="core"), key=lambda x: x.id)]
-        system = render_base(persona, core, lang, tone=tone_lines(lang, s.warmth, s.initiative, s.humor),
-                             relationship=s.relationship, chat_rules=False)
+        system = render_base(persona, core, lang, tone=[] if s.bare_mode else tone_lines(lang, s.warmth, s.initiative, s.humor),
+                             relationship=s.relationship, chat_rules=False, bare=s.bare_mode)
         q = r.followups[followup]["question"] if followup is not None else r.question
         hits = await M.search(pool, deps.embedder, r.companion_id, q, limit=5, touch=False, now=now)
         if hits:

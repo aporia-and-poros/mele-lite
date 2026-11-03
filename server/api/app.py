@@ -11,10 +11,11 @@ from fastapi import FastAPI
 
 from brain.turn import Deps
 from patrol.loop import patrol_loop
+from brain.call_ring import Ringer
 from push.apns import push_loop
 
 from . import (routes_account, routes_milestones, routes_album, routes_books, routes_tarot, routes_voice, routes_wallet, routes_attachments, routes_chat, routes_companions, routes_dates, routes_diary, routes_drawer,
-               routes_favorites, routes_food, routes_groups, routes_host, routes_lore, routes_mcp, routes_memories, routes_memory_link, routes_music, routes_moments, routes_patrol, routes_people, routes_stickers, routes_todos)
+               routes_favorites, routes_food, routes_groups, routes_host, routes_lore, routes_mcp, routes_memories, routes_memory_link, routes_music, routes_moments, routes_patrol, routes_people, routes_stickers, routes_todos, routes_call)
 from .deps import Api, ApiConfig
 from .rooms import Rooms
 
@@ -25,6 +26,8 @@ def create_app(deps: Deps, cfg: ApiConfig) -> FastAPI:
     rooms = Rooms(cfg.wait_scale)
     if deps.files_dir is None:                     # 语音也存在附件目录下（10-03）
         deps.files_dir = cfg.files_dir
+    if deps.ringer is None:                        # TA 打给你（10-31）：VoIP 推送走推送中转
+        deps.ringer = Ringer(deps.pool, cfg.push_relay, publish=rooms.publish, now=deps.now)
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -44,7 +47,8 @@ def create_app(deps: Deps, cfg: ApiConfig) -> FastAPI:
               routes_attachments.router, routes_dates.router, routes_drawer.router, routes_food.router,
               routes_music.router, routes_lore.router, routes_people.router, routes_diary.router, routes_todos.router, routes_stickers.router, routes_moments.router,
               routes_favorites.router, routes_album.router, routes_books.router,
-              routes_wallet.router, routes_tarot.router, routes_voice.router, routes_host.router, routes_milestones.router, routes_mcp.router, routes_groups.router, routes_memories.router, routes_memory_link.router):
+              routes_wallet.router, routes_tarot.router, routes_voice.router, routes_host.router, routes_milestones.router, routes_mcp.router, routes_groups.router, routes_memories.router, routes_memory_link.router,
+              routes_call.router):
         app.include_router(r)
 
     @app.get("/health")

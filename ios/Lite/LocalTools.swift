@@ -50,13 +50,20 @@ enum LocalTools {
             LocalTarot.toolSpec(zh: zh),
             LocalMusic.toolSpec(zh: zh),
             LocalFocus.toolSpec(zh: zh),
+            t(phoneCall, "用途：给 TA 打语音电话（10-31）。什么时候打你自己定——想听 TA 的声音、有话打字说不清、TA 说了让你打，都可以；别为了一件小事就打，也别一聊就打。打出去以后这一轮就结束了，等 TA 接：接了你先开口；没接、拒绝，下一轮你会看到。reason 写一句你为什么想打（TA 来电页上看得到，口气跟你平时一样）。还没接通就想反悔：withdraw = true 挂掉。",
+              "Purpose: give them a voice call. When to call is up to you — wanting to hear their voice, something that's easier said than typed, or they asked you to call. Don't call over every small thing or every time you chat. Once it rings this turn ends and you wait: if they pick up, you speak first; if they miss or decline it, you'll see that next turn. reason = one line on why you're calling (shown on their incoming-call screen; your usual tone). Changed your mind before they answer: withdraw = true hangs up.",
+              #"{"type":"object","properties":{"reason":{"type":"string","description":"为什么想打，一句"},"withdraw":{"type":"boolean","description":"true = 还没接通就挂掉"}}}"#),
         ].filter { !hiding.contains($0.name) }
     }
 
     struct Outcome {
         var result: String          // 递回给模型的
         var card: [String: Any]?    // 挂在聊天里的「做了几件事」
+        var endTurn = false         // 这个工具用完这一轮就结束（打电话：在响，等 TA 接）
     }
+
+    static let phoneCall = "phone_call"
+
 
     static func run(_ call: ToolCall, host: LocalHost, companion: String, conversation: String? = nil, zh: Bool) async -> Outcome {
         let a = call.arguments
@@ -72,6 +79,18 @@ enum LocalTools {
             ["kind": kind, "text": "\(zh ? zhTitle : enTitle)：\(body)"]
         }
         switch call.name {
+        case phoneCall:
+            guard let conversation else { return Outcome(result: "打不了：不知道是哪个窗口", card: nil) }
+            if a["withdraw"] as? Bool == true {
+                let ok = await MainActor.run { IncomingCalls.shared.withdraw(conversation: conversation) }
+                return Outcome(result: ok ? "挂掉了，TA 那边显示「对方已取消」" : "现在没有在响的电话", card: nil)
+            }
+            let reason = (a["reason"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let placed = await MainActor.run { IncomingCalls.shared.place(conversation: conversation, companion: companion, reason: reason) }
+            switch placed {
+            case .ringing: return Outcome(result: "电话打出去了，在响。等 TA 接。", card: nil, endTurn: true)
+            case .busy: return Outcome(result: "没打出去：你们正在通话，或者上一通还在响", card: nil)
+            }
         case "wallet_add":
             let (good, v) = ok(LocalRooms2.walletAdd(s, a))
             guard good else { return Outcome(result: "没记上：\(v["detail"] ?? "")", card: nil) }

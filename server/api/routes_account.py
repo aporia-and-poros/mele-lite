@@ -191,13 +191,18 @@ async def add_key(body: dict = Body(...), acc: UUID = Depends(account), a: Api =
 
 @router.patch("/keys/{key_id}")
 async def patch_key(key_id: UUID, body: dict = Body(...), acc: UUID = Depends(account), a: Api = Depends(api)):
-    """改活（chores / draw_model，10-15）；旧 App 还会发 ledger_model。"""
+    """改活（chores / draw_model，10-15）、换聊天模型（chat_model，10-29）；旧 App 还会发 ledger_model。"""
     pool = a.deps.pool
     k = next((x for x in await auth.list_keys(pool, acc) if x.id == key_id), None)
     if k is None:
         raise HTTPException(404, "没有这把钥匙")
     if "ledger_model" in body:
         await auth.set_ledger_model(pool, acc, key_id, str(body.get("ledger_model") or ""))
+    if "chat_model" in body and k.provider != "elevenlabs":
+        try:
+            await auth.set_chat_model(pool, acc, key_id, str(body.get("chat_model") or ""))
+        except auth.AuthError as e:
+            raise _bad(e) from e
     table, moved = await CH.get_table(pool, acc), []
     if "chores" in body and k.provider != "elevenlabs":
         try:

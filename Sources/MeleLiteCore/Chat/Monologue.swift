@@ -59,6 +59,14 @@ public enum Monologue {
     /// 跟 Host 的 brain/monologue.recover_untagged 同一个规矩
     public static func recoverUntagged(_ text: String, pronoun: String, zh: Bool) -> (monologue: String, body: String) {
         let none = ("", text)
+        // 11-03 内测截图：split 把心声接回正文末尾，正文没「你」时一路收到心声里提到 TA 的那行，正文连心声进了思考，
+        // 气泡只剩一个 [/心声]。心声先拿出去，只在前面的正文里找，找完接回去
+        if InnerVoice.has(text) {
+            let (rest, voice) = InnerVoice.split(text)
+            let (mono, body) = recoverUntagged(rest, pronoun: pronoun, zh: zh)
+            guard !mono.isEmpty else { return none }
+            return voice.isEmpty ? (mono, body) : (mono, body + "\n\n" + InnerVoice.contextLine(voice, zh: zh))
+        }
         guard pairCount(text) == 0 else { return none }
         let p = pronoun.trimmingCharacters(in: .whitespaces)
         guard !p.isEmpty, zh || ["she", "he"].contains(p.lowercased()) else { return none }
@@ -197,12 +205,34 @@ public enum Monologue {
 
     /// 放进 system 的规矩 + 范文（照服务器 monologue.rules）。pronoun 中文是「她 / 他 / TA」，英文是 she / he / they；
     /// style = 用户自己写的思考风格，空着就用出厂那份（Aporia 09-27 写的）；character = 自定义角色的名字（导入的卡、改过性格的），出厂 Lumi 传空
-    public static func rules(zh: Bool, pronoun: String, style: String, userName: String = "", character: String = "") -> String {
+    /// bare = 本体化（11-03 Aporia：我们加的风格都去掉，用户自己写的照用，功能照留）：照样写 [独白]；我们的范文、出厂思考风格、
+    /// 讲怎么想的那两条不放，只剩格式（写在标签里、人称、先调工具）。style 是用户自己写的就照放在「怎么想」。
+    /// examples = 用户自己写的范文（11-03）：写了就换掉我们那两段，本体化时也照放；没套 [独白] 标签的替它套上
+    public static func rules(zh: Bool, pronoun: String, style: String, userName: String = "", character: String = "",
+                             bare: Bool = false, examples: String = "") -> String {
         let own = style.trimmingCharacters(in: .whitespacesAndNewlines)
-        let st = own.isEmpty ? factoryStyle(zh: zh, pronoun: pronoun, userName: userName, character: character) : own
-        if zh { return fill(rulesZH, ["style": st, "p": pronoun]) }
+        let st = own.isEmpty ? (bare ? "" : factoryStyle(zh: zh, pronoun: pronoun, userName: userName, character: character)) : own
+        var t = zh ? rulesZH : rulesEN
+        let cut = bareCut(zh: zh), ex = examples.trimmingCharacters(in: .whitespacesAndNewlines)
+        if bare || !ex.isEmpty {
+            t = t.components(separatedBy: cut.examples)[0]
+            if bare {
+                if own.isEmpty { t = t.replacingOccurrences(of: cut.how, with: "") }
+                t = t.components(separatedBy: "\n").filter { l in !cut.styled.contains { l.hasPrefix($0) } }.joined(separator: "\n")
+            }
+            if !ex.isEmpty {
+                let wrapped = hasTag(ex) ? ex : (zh ? "[独白]\n\(ex)\n[/独白]" : "[monologue]\n\(ex)\n[/monologue]")
+                t += cut.examples + (zh ? "照这个写法，内容别照抄）：\n\n" : "write like this; don't copy the content):\n\n") + wrapped
+            }
+        }
+        if zh { return fill(t, ["style": st, "p": pronoun]) }
         let (subj, obj, poss, _, _, _) = forms(pronoun)
-        return fill(rulesEN, ["style": st, "p": subj, "obj": obj, "poss": poss])
+        return fill(t, ["style": st, "p": subj, "obj": obj, "poss": poss])
+    }
+
+    static func bareCut(zh: Bool) -> (examples: String, how: String, styled: [String]) {
+        zh ? ("\n\n范文（", "\n\n怎么想：\n{style}", ["- 独白没有听众", "- 独白里不计划"])
+           : ("\n\nExamples (", "\n\nHow you think:\n{style}", ["- The monologue has no audience", "- No planning the reply"])
     }
 
     /// 出厂思考风格（照服务器 inject.thinking_style）：手写独白时嵌在规矩里；用模型自己的思考时每轮贴一次（10-08）。

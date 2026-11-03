@@ -29,9 +29,36 @@ import Testing
         #expect(r.text == "好\n\n真好")
     }
 
-    @Test func halfWrittenMarkerStays() {
+    @Test func halfWrittenMarkerIsStrippedNotSent() {
         let r = Markers.parse("[表情包：没写完")
-        #expect(r.stickers.isEmpty && r.text == "[表情包：没写完")
+        #expect(r.stickers.isEmpty && r.text == "")
+        let s = Markers.parse("好呀 [表情包：#3\n明天见")
+        #expect(s.stickers.isEmpty && s.text == "好呀\n明天见")
+        #expect(Markers.parse("哈哈[表情包]你真逗").text == "哈哈你真逗")
+        #expect(Markers.parse("⟪里程碑：第一次").milestones.isEmpty)
+        #expect(Markers.parse("⟪里程碑：第一次").text == "")
+    }
+
+    @Test func numberInsideASentence() {
+        let r = Markers.parse("好呀[表情包：#12]我们走")
+        #expect(r.stickers == ["#12"] && r.text == "好呀我们走")
+        let e = Markers.parse("sure [sticker: #4] see you")
+        #expect(e.stickers == ["#4"] && e.text == "sure see you")
+        let z = Markers.parse("[表情包：#7] 晚安")
+        #expect(z.text == "晚安")
+    }
+
+    @Test func crookedBracketsStillCount() {
+        #expect(Markers.parse("嗯【表情包：#2】").stickers == ["#2"])
+        #expect(Markers.parse("嗯［表情包：#2］").stickers == ["#2"])
+        #expect(Markers.parse("《里程碑：一百天》").milestones == ["一百天"])
+        #expect(Markers.parse("《里程碑：一百天》").text == "")
+    }
+
+    @Test func scrubLeavesNoMarker() {
+        #expect(Markers.scrub("晚安[表情包：#3] ⟪里程碑：一起熬夜⟫") == "晚安")
+        #expect(Markers.scrub("没写完 [sticker: #9") == "没写完")
+        #expect(Markers.scrub("普通的话 [小声] 不动") == "普通的话 [小声] 不动")
     }
 
     @Test func noExtraBlankLinesLeft() {

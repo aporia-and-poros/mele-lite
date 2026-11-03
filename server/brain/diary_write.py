@@ -198,8 +198,8 @@ async def write_day(deps, account, companion, day: date, now: datetime, *, main:
     chars = FREE_CHARS if route.trial else s.diary_chars
     persona = Persona.from_dict(await archive.get_persona(pool, companion), s.lang)
     core = [m.content for m in sorted(await M.list_memories(pool, companion, kind="core"), key=lambda m: m.id)]
-    base = render_base(persona, core, s.lang, tone=tone_lines(s.lang, s.warmth, s.initiative, s.humor),
-                       relationship=s.relationship, chat_rules=False)
+    base = render_base(persona, core, s.lang, tone=[] if s.bare_mode else tone_lines(s.lang, s.warmth, s.initiative, s.humor),
+                       relationship=s.relationship, chat_rules=False, bare=s.bare_mode)
     req = ChatRequest(model=route.chat_model, system=[Block(base)],
                       messages=[Msg("user", render_prompt(s.lang, now, day, s.tz, mats, chars))],
                       tools=[t for t in tool_specs() if t.name in TOOLS], max_tokens=4000)

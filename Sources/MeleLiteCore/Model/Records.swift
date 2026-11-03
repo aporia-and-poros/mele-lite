@@ -55,6 +55,8 @@ public struct Contact: Codable, Identifiable, Equatable, Sendable {
     public var talkRules: String?
     /// 关系包（照服务器 manuals/<语言>/relationship/，10-08）：主身份「我跟 TA 是什么关系、怎么相处」那一段，放在底子后面
     public var relationshipPack: String?
+    /// 本体化（11-03 Aporia）：不加 Mele 的口气——底子、关系包、线上线下那段换成只讲格式的，用户自己写的照用。nil = 关（老数据）
+    public var bare: Bool?
     /// 出厂的说话规矩（设置页「看出厂的」用）
     public static func factoryTalk(_ lang: Lang) -> String { Resources.mode("talk", lang) }
 

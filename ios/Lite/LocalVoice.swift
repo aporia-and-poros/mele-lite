@@ -5,7 +5,8 @@ import MeleLiteCore
 
 /// 声音（10-04 Aporia：声音不用服务器，填自己的 ElevenLabs key 就行）：照 server/api/routes_voice.py + brain/voice.py + brain/voice_in.py 搬进手机。
 /// - 钥匙只认用户自己的 ElevenLabs key（钥匙串里 "elevenlabs"）；没有我们出钱的额度。没 key = 不发语音条、不念、不收语音。
-/// - 它在回复里用 🎤 开头标一段 → 那段自己成一条 → 念出来存成 voice-<id>.mp3，挂在那条消息的 voice_clips 上（按文字指纹）。
+/// - 它在回复里用 🎤 开头标一段 → 那段自己成一条 → 先落一个占位的语音条（lazy_voice：编号 + 估的秒数，不花钱）；
+///   TA 点了才念（10-31 按需念），念好存成 voice-<id>.mp3，挂在那条消息的 voice_clips 上（按文字指纹）。
 /// - 念过的按「文字 + 嗓子 + 模型」指纹存在 voice-cache.json，同一句再念不花钱。
 /// - TA 发语音：Scribe 转文字 + 量语速、停顿、笑和叹气（跟 TA 自己最近 20 条比）→ 附件 kind=voice，caption 是〔语音 12 秒：…〕那行。
 enum LocalVoice {
@@ -135,6 +136,11 @@ enum LocalVoice {
     /// 念不成的时候：这一条照常当文字发（去 🎤、去标签）
     static func asText(_ bubble: String) -> String { stripTags(body(bubble)) }
 
+    /// 还没念的语音条：编号按稿子的指纹（事件流里和翻历史时是同一个），秒数按字数估
+    static func lazyRef(_ bubble: String) -> [String: Any] {
+        ["id": "n" + sha(body(bubble)).prefix(20), "duration_ms": VoiceNoteLength.estimateMs(body(bubble)), "lazy": true]
+    }
+
     static func sha(_ s: String) -> String { SHA256.hash(data: Data(s.utf8)).map { String(format: "%02x", $0) }.joined() }
 
     static func voiceID(_ settings: [String: Any]) -> String {
@@ -164,20 +170,29 @@ enum LocalVoice {
         return clip
     }
 
-    /// 念给我听：它那条消息的第几个气泡
+    /// 念给我听：它那条消息的第几个气泡。是语音条（🎤）就是「点了才念」那一下：带上前后句念得顺，念好挂回那条消息
     private static func speakMessage(_ host: LocalHost, _ mid: Int, index: Int) async -> LocalResponse {
         guard let (conv, i) = host.store.locate(message: mid) else { return .error(400, String(localized: "只能念它说的话")) }
         let m = host.store.messages(conv)[i]
-        guard (m["role"] as? String) == "assistant", let comp = host.companion(ofConversation: conv) else {
+        guard (m["role"] as? String) == "assistant", host.companion(ofConversation: conv) != nil else {
             return .error(400, String(localized: "只能念它说的话"))
         }
-        let settings = comp["settings"] as? [String: Any] ?? [:]
+        let settings = host.settings(forMessage: m, in: conv)
         let bubbles = Bubbles.split(m["text"] as? String ?? "", cap: settings["max_bubbles"] as? Int ?? 6,
                                     offline: settings["long_mode"] as? Bool ?? false)
         guard bubbles.indices.contains(index) else { return .error(400, String(localized: "没有这一条")) }
         let b = bubbles[index]
+        let note = isVoice(b)
+        let near = { (j: Int) -> String? in note && bubbles.indices.contains(j) ? asText(bubbles[j]) : nil }
         do {
-            let clip = try await speak(host, text: isVoice(b) ? body(b) : b, voiceID: voiceID(settings))
+            let clip = try await speak(host, text: note ? body(b) : b, voiceID: voiceID(settings), prev: near(index - 1), next: near(index + 1))
+            if note, let (c, at) = host.store.locate(message: mid) {      // 下次翻历史直接是念好的那段
+                var list = host.store.messages(c)
+                var clips = list[at]["voice_clips"] as? [String: Any] ?? [:]
+                clips[sha(body(b))] = clip
+                list[at]["voice_clips"] = clips
+                host.store.saveMessages(c, list)
+            }
             return .json(clip)
         } catch let f as Fail { return err(f.kind) } catch { return err("network") }
     }

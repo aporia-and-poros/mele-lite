@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 
 @dataclass(frozen=True)
@@ -80,6 +80,8 @@ class ChatRequest:
     max_tokens: int = 8000
     thinking: bool = False
     user_tag: str = ""           # 固定的用户标记（哈希）：同一个人的请求尽量落在同一处
+    # 电话（10-31）：正文每来一小段就递一下（边写边念）；平时是 None。抛出的异常会一路传出去（她开口打断时用）
+    on_text: Callable[[str], None] | None = field(default=None, compare=False, repr=False)
 
     def estimated_prompt(self) -> int:
         """对方没报用量时（有的兼容中转不回 usage）按字数估这次上下文多大，好让账本照样到点就卷（10-13 内测）。"""

@@ -45,4 +45,10 @@ import Testing
         let ids = RoomTimeline.merge(cur, others: o, limit: 5).map(\.id)
         #expect(Set(ids).count == 2)
     }
+    @Test func stripsLeakedRoomTag() {      // 10-31 内测：它学着历史在开头垫房间标签
+        #expect(RoomTimeline.stripTag("〔群「三人行」 · 小满〕哈哈") == "哈哈")
+        #expect(RoomTimeline.stripTag("〔私聊〕嗯") == "嗯")
+        #expect(RoomTimeline.stripTag("〔现在〕不动") == "〔现在〕不动")
+        #expect(RoomTimeline.note(here: RoomTimeline.privateRoom(zh: true), zh: true).contains("你现在在私聊"))
+    }
 }

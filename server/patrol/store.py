@@ -186,6 +186,8 @@ async def last_said(pool, companion: UUID) -> tuple[datetime | None, str | None,
 async def queue_push(pool, *, account: UUID, companion: UUID, conversation: UUID, text: str,
                      urgent: bool = False, quiet: bool = False) -> None:
     """urgent = 时效性通知（穿过勿扰）：只给 TA 自己定的钟、远事当天那次。quiet = 不响（早上那句，别吵醒 TA）。"""
+    from brain import markers, voice      # 通知里是人话（10-31）：语音条给逐字稿（不带 🎤 和 [soft]），标记一个都不留
+    text = markers.scrub("\n\n".join(voice.as_text(p) if voice.is_voice(p) else p for p in (text or "").split("\n\n")))
     await pool.execute("INSERT INTO push_queue (account_id, companion_id, conversation_id, text, urgent, quiet) "
                        "VALUES ($1, $2, $3, $4, $5, $6)", account, companion, conversation, text, urgent, quiet)
 

@@ -28,7 +28,7 @@ PATROL_OVERRIDES = {                                # 高级设置里能单独�
 
 # 「高级」里的项：「同步到全部联系人」只抄这些（09-28 Aporia要的一键同步），不碰名字、性格、关系、钥匙这些外层的
 ADVANCED_KEYS = ("careful_read", "recall_probe", "reply_wait", "max_bubbles", "thinking", "thinking_mode",
-                 "thinking_style_text", "ledger_same_as_chat", "sentinels", "injections", "patrol_overrides",
+                 "thinking_style_text", "monologue_examples", "ledger_same_as_chat", "sentinels", "injections", "patrol_overrides",
                  "heartbeat_on", "tool_reminder_every", "thinking_style_every", "inner_voice", "inner_voice_style",
                  "monologue_retry")
 
@@ -78,6 +78,7 @@ class Settings:
     sentinels: dict[str, bool] = field(default_factory=lambda: {k: k not in SENTINELS_OFF for k in SENTINELS})
     tool_reminder_every: int = 5
     thinking_style_text: str = ""          # 自己改写的思考风格；空 = 用出厂的
+    monologue_examples: str = ""           # 自己写的独白范文（11-03 Aporia）；空 = 用出厂那两段，本体化时也照放
     thinking_style_every: int = 3          # 思考风格隔几轮在尾巴贴一次全文（10-11 Aporia：滑块 1…12，默认 3；两种模式都按它）
     inner_voice: bool = False              # 回复后的心声（10-11）：说完以后最后写 [心声]…[/心声]，App 画成小卡片
     inner_voice_style: str = ""            # 自己写的心声写法；空 = 出厂
@@ -104,6 +105,8 @@ class Settings:
     bilingual_lang: str = "English"     # TA 说什么话
     bilingual_to: str = ""              # 译成什么；空 = App 语言
     bilingual_by: str = "key"           # 译文谁写：key = 钥匙串「翻译」那把（便宜）；self = TA 每泡自己写〔译〕
+    call_voice: str = "fast"            # 电话里的声音（10-31）：fast 低延迟那档 / expressive 跟语音条一样 / system 手机自带（Host 不合成）
+    bare_mode: bool = False             # 本体化（11-03）：不加 Mele 的口气——不写独白 / 心声、不贴思考风格和人设锚、出厂性格不放，思考用模型自己的
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -156,6 +159,8 @@ class Settings:
             raise ValueError("thinking_mode must be native, monologue or empty")
         if not 0 <= self.reply_wait <= 60:
             raise ValueError("reply_wait must be 0..60 seconds")
+        if self.call_voice not in ("fast", "expressive", "system"):
+            raise ValueError("call_voice must be fast, expressive or system")
         if self.voice_mode not in ("off", "sometimes", "often"):
             raise ValueError("voice_mode must be off, sometimes or often")
         if self.tool_reminder_every < 1:

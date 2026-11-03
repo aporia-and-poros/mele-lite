@@ -115,8 +115,8 @@ async def look_batch(deps, account, companion, photos: list[A.Photo], now: datet
         ask += "\n\n" + "\n".join(await _seen_text(deps, scope, route, photos, lang, day))
     persona = Persona.from_dict(await archive.get_persona(pool, companion), lang)
     core = [x.content for x in sorted(await M.list_memories(pool, companion, kind="core"), key=lambda x: x.id)]
-    base = render_base(persona, core, lang, tone=tone_lines(lang, s.warmth, s.initiative, s.humor),
-                       relationship=s.relationship, chat_rules=False)
+    base = render_base(persona, core, lang, tone=[] if s.bare_mode else tone_lines(lang, s.warmth, s.initiative, s.humor),
+                       relationship=s.relationship, chat_rules=False, bare=s.bare_mode)
     recent = await _recent(pool, account, companion, lang, s.user_name)
     req = ChatRequest(model=route.chat_model, system=[Block(base)],
                       messages=[Msg("user", f"{recent}\n\n{ask}" if recent else ask, images=images)],

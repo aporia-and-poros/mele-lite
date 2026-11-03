@@ -341,7 +341,10 @@ struct CompanionSettingsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("完成") { Task { await store.flush(); await model.refresh(); dismiss() } }
+                    Button("完成") { Task {
+                        try? await Task.sleep(for: .milliseconds(450))     // 长文字框停手 0.4 秒才写回（DraftTextEditor），等它写完再存
+                        await store.flush(); await model.refresh(); dismiss()
+                    } }
                 }
             }
         }
@@ -449,7 +452,7 @@ struct CompanionSettingsView: View {
     @ViewBuilder
     private func foldingEditor(_ text: Binding<String>, open: Binding<Bool>) -> some View {
         let long = text.wrappedValue.count > 240 || text.wrappedValue.split(separator: "\n", omittingEmptySubsequences: false).count > 8
-        TextEditor(text: text)
+        DraftTextEditor(text: text)
             .font(Typo.sans(Typo.Size.callout))
             .frame(minHeight: 120, maxHeight: long && !open.wrappedValue ? 160 : .infinity)
             .scrollContentBackground(.hidden)
@@ -548,6 +551,10 @@ struct CompanionSettingsView: View {
                     row("线下生活", Lite.local ? "开着：TA 有自己的一天，会聊自己在哪、在干嘛，有地图。关着：TA 的日子就是和你聊天。进线下模式时会自动打开"
                         : "开着：TA 有自己的一天，会聊自己吃饭、出门这些事。关着：TA 的日子就是和你聊天。进线下模式时会自动打开")
                 }
+            }
+            // 本体化（11-03 Aporia）：Mele 加的说话 / 思考风格都不放；你自己写的照用，功能都在，关回去一切照旧
+            Toggle(isOn: store.s("bare_mode", false)) {
+                row("本体化", "不加 Mele 的口气，让 TA 用模型自己的样子说话。你自己写的设定照用，功能都还在")
             }
         } header: { GlassHeader(String(localized: "关于 \(genderWord)")) }
     }
@@ -989,5 +996,40 @@ struct AddDateView: View {
                 }
             }
         }
+    }
+}
+
+
+/// 长文字框（10-31 内测：人设、说话规矩写长了以后打字卡）：先改自己手上的草稿，停手一会儿再写回设定。
+/// 直接绑设定的话，每敲一个字整页设定都要重画一遍，字一多就卡。外面改了（看出厂的、导入）照样跟上。
+struct DraftTextEditor: View {
+    @Binding var text: String
+    @State private var draft = ""
+    @State private var ready = false
+    @State private var commit: Task<Void, Never>?
+
+    var body: some View {
+        TextEditor(text: $draft)
+            .onAppear {
+                if !ready { draft = text; ready = true }
+            }
+            .onChange(of: draft) { _, v in
+                guard ready, v != text else { return }
+                commit?.cancel()
+                commit = Task {
+                    try? await Task.sleep(for: .milliseconds(400))
+                    if Task.isCancelled { return }
+                    text = v
+                    commit = nil
+                }
+            }
+            .onChange(of: text) { _, v in
+                if commit == nil, v != draft { draft = v }      // 正在打字时不抢；停手写回去以后两边一样
+            }
+            .onDisappear {
+                commit?.cancel()
+                commit = nil
+                if ready, draft != text { text = draft }
+            }
     }
 }

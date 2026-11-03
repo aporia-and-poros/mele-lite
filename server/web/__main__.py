@@ -37,6 +37,14 @@ class DemoModel:
             self.wakes += 1
             text = "（演示模型）醒来想起你了——今天过得怎么样？" if self.wakes % 2 else "<silent>"
             return Reply(text, "", [], Usage(), "end_turn", None)
+        if "〔现在在打电话〕" in req.messages[-1].text or "[You're on a phone call]" in req.messages[-1].text:
+            # 电话（10-31）：一句一行，一个字一个字地推（看边写边念）
+            text = "（演示模型）我听着呢。\n你那边现在几点啦？"
+            for ch in text:
+                if req.on_text:
+                    req.on_text(ch)
+                await asyncio.sleep(0.02)
+            return Reply(text, "", [], Usage(), "end_turn", None)
         chunks = [c for c in req.messages[-1].text.split("\n\n") if c.strip() and not c.startswith("〔")]
         said = chunks[-1] if chunks else ""
         return Reply(f"收到：{said}\n\n（这是演示模型，没有联网）", f"（演示模型的思考）TA 说了「{said[:20]}」，我复述一遍。",

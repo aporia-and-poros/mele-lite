@@ -72,6 +72,11 @@ final class APIClient: @unchecked Sendable {
         return req
     }
 
+    /// 自己拿着去读流的请求（电话的事件流 / 合成的声音流，10-31）
+    func request(_ method: String, _ path: String, json: Any? = nil) throws -> URLRequest {
+        try makeRequest(method, path, json: json)
+    }
+
     private func check(_ data: Data, _ resp: URLResponse) throws {
         guard let http = resp as? HTTPURLResponse else { return }
         guard (200..<300).contains(http.statusCode) else {

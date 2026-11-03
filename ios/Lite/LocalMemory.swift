@@ -637,7 +637,9 @@ final class LocalMemory: @unchecked Sendable {
                         + "title: your own short headline, 2-6 words, written fresh (don't copy or cut the first sentence), e.g. "
                         + "\"Mango allergy\". tags: 1-4 short topic tags, e.g. [\"health\", \"family\"]. "
                         + "importance 1-10 (10 = never let this fade). valence -1..1 (sad..happy), arousal 0..1 "
-                        + "(calm..intense). If a nearly identical memory exists it is merged, not duplicated.",
+                        + "(calm..intense). If a nearly identical memory exists it is merged, not duplicated. "
+                        + "Write content in your own first person: you are \"I\", the user is their name (or \"they\"), never \"you\" — "
+                        + "otherwise it's unclear later who did what.",
                     inputSchemaJSON: Self.spec([
                         "content": ["type": "string"], "title": ["type": "string"],
                         "tags": ["type": "array", "items": ["type": "string"]],

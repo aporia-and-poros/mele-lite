@@ -8,7 +8,7 @@ from brain import todos
 from brain import accounts, archive, auth, ledger, rewind
 from brain.scope import Scope
 from brain.turn import Deps, run_turn
-from brain.wake_text import render_wake, split_silent
+from brain.wake_text import SILENT_DID, render_wake, split_silent
 from llm.errors import LLMError
 from llm.fake import FakeModel
 from llm.types import Usage
@@ -85,6 +85,23 @@ async def test_silent_leaves_nothing(pool):
     assert await archive.recent(pool, scope.conversation) == []
     assert (await archive.usage_on(pool, scope.account, NOW.date()))["calls"] == 1   # 钱照记
     assert model.requests[0].messages[-1].text.count("〔醒来〕") == 1
+
+
+async def test_silent_but_did_things_leaves_a_note(pool):
+    """10-30 内测：醒来去做了自己的事（用了工具）但没找 TA——留一条〔醒来〕，下一轮看得到、账本记一行"""
+    deps, scope, model = await setup(pool, [
+        {"calls": [("memory_search", {"query": "论坛"})]}, "<silent>", "嗯，我在"])
+    out, ev = await go(deps, scope, wake=wake_text())
+    assert out.said is False and ev == []
+    msgs = await archive.recent(pool, scope.conversation)
+    assert [m.role for m in msgs] == ["wake"] and msgs[0].text.startswith(SILENT_DID["zh"]) and "论坛" in msgs[0].text
+    await go(deps, scope, "你醒啦")
+    req = model.requests[-1]
+    assert [m.role for m in req.messages] == ["user"]                 # 那条和 TA 的话并成一段，不连着两条
+    said = req.messages[0].text
+    assert SILENT_DID["zh"] in said and said.index(SILENT_DID["zh"]) < said.index("你醒啦")
+    day = ledger.day_transcripts(await archive.recent(pool, scope.conversation), TZ, "zh")
+    assert "做了自己的事" not in str(day) and "论坛" in str(day) and "去找 TA" not in str(day)
 
 
 async def test_said_saves_wake_then_reply_and_next_turn_sees_it(pool):

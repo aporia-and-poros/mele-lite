@@ -84,10 +84,10 @@ async def _drop_older(pool, acc: UUID, keep: str, push_key: str | None) -> None:
                            acc, push_key, keep)
 
 
-async def _relay_register(relay: str, token: str, sandbox: bool) -> tuple[str, str] | None:
+async def _relay_register(relay: str, token: str, sandbox: bool, voip: bool = False) -> tuple[str, str] | None:
     import httpx
     async with httpx.AsyncClient(timeout=10) as c:
-        r = await c.post(f"{relay.rstrip('/')}/register", json={"token": token, "sandbox": sandbox})
+        r = await c.post(f"{relay.rstrip('/')}/register", json={"token": token, "sandbox": sandbox, "voip": voip})
     if r.status_code != 200:
         return None
     j = r.json()
@@ -118,6 +118,44 @@ async def device_via_host(body: dict = Body(...), acc: UUID = Depends(account), 
         acc, f"relay:{rid}", a.deps.now(), secret, push_key)
     await _drop_older(a.deps.pool, acc, f"relay:{rid}", push_key)
     return {"relay_id": rid}
+
+
+@router.post("/me/voip", status_code=204)
+async def voip_device(body: dict = Body(...), acc: UUID = Depends(account), a: Api = Depends(api)):
+    """TA 打给你（10-31）：手机在推送中转登记了 VoIP 设备号，把编号、口令、加密钥匙交给 Host"""
+    rid = str(body.get("relay_id") or "").strip()[:100]
+    secret = str(body.get("relay_secret") or "").strip()[:200]
+    push_key = str(body.get("push_key") or "").strip()[:100]
+    if not (rid and secret and push_key):
+        raise HTTPException(400, "要带 relay_id、relay_secret、push_key")
+    await _save_voip(a, acc, rid, secret, push_key)
+    return Response(status_code=204)
+
+
+@router.post("/me/voip/relay")
+async def voip_via_host(body: dict = Body(...), acc: UUID = Depends(account), a: Api = Depends(api)):
+    """手机连不上推送中转站（国内）：VoIP 设备号交给 Host，Host 替它去登记"""
+    token = str(body.get("token") or "").strip()
+    push_key = str(body.get("push_key") or "").strip()[:100]
+    if not token or len(token) > 200 or not push_key:
+        raise HTTPException(400, "要带 token 和 push_key")
+    if not a.cfg.push_relay:
+        raise HTTPException(409, "这台 Host 没开推送中转")
+    try:
+        got = await _relay_register(a.cfg.push_relay, token, bool(body.get("sandbox")), voip=True)
+    except Exception:
+        got = None
+    if got is None:
+        raise HTTPException(502, "Host 也连不上推送中转站")
+    await _save_voip(a, acc, got[0], got[1], push_key)
+    return {"relay_id": got[0]}
+
+
+async def _save_voip(a: Api, acc: UUID, rid: str, secret: str, push_key: str) -> None:
+    await a.deps.pool.execute(
+        """INSERT INTO voip_devices (account_id, push_key, relay_id, relay_secret, updated_at) VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (account_id, push_key) DO UPDATE SET relay_id = $3, relay_secret = $4, updated_at = $5""",
+        acc, push_key, rid, secret, a.deps.now())
 
 
 # ── 你定的钟 ──

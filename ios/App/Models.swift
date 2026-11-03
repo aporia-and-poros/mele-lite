@@ -172,6 +172,8 @@ struct MessageDTO: Decodable, Identifiable {
     var attachments: [AttachmentDTO]?
     /// 跟 bubbles 并排：那一泡是语音条就有（10-03），文字是 null
     var voices: [VoiceRef?]?
+    /// 跟 bubbles 并排：还没念的语音条（10-31 按需念）——画成语音条，点了才念；老服务器没有这列
+    var lazyVoices: [VoiceRef?]?
     /// 这一轮想了多久（毫秒，10-05）；早先的消息没有
     var thinkingMs: Int?
     /// 搬家搬来的那段第一条上：「Claude ·《标题》· 日期」，画成一行灰字（10-05）
@@ -183,11 +185,20 @@ struct MessageDTO: Decodable, Identifiable {
     var speakerName: String?
     /// 双语气泡（10-15）：跟 bubbles 并排的译文（你的泡 = 翻成 TA 那种语言的版本）；没开 / 没翻是 nil
     var translations: [String?]?
+    /// 电话（10-31，Lite）：电话里说的那几条不出气泡；挂断那条画成一行「📞 通话时长」，点开看这通的逐句
+    var call: Bool?
+    var callEnd: Bool?
+    var callID: String?
+    /// TA 打来没接通（10-31 第 4 步）：missed / declined / withdrawn，画成一行「📞 未接来电」，点了回拨
+    var ring: String?
     enum CodingKeys: String, CodingKey {
-        case id, role, text, thinking, at, bubbles, cards, reaction, reactions, attachments, voices, divider, speaker, translations
+        case id, role, text, thinking, at, bubbles, cards, reaction, reactions, attachments, voices, divider, speaker, translations, call, ring
+        case callEnd = "call_end"
+        case callID = "call_id"
         case thinkingMs = "thinking_ms"
         case innerVoice = "inner_voice"
         case speakerName = "speaker_name"
+        case lazyVoices = "lazy_voices"
     }
 }
 
@@ -227,12 +238,13 @@ struct ChatEvent: Decodable {
     var song: SongCardData?
     var stickerID: Int?
     var voice: VoiceRef?
+    var lazyVoice: VoiceRef?     // bubble：还没念的语音条（10-31），点了才念
     var ms: Int?                 // thinking：这一轮想了多久（10-05）
     var speaker: UUID?           // 群里是谁（10-11）
     var speakerName: String?
     var translation: String?     // bubble：双语气泡的译文（10-15）
     var translations: [String]?  // user_translation：你刚发那条翻好的（10-15）
-    enum CodingKeys: String, CodingKey { case type, text, kind, message, data, voice, ms, speaker, translation, translations; case isPrivate = "private"; case speakerName = "speaker_name" }
+    enum CodingKeys: String, CodingKey { case type, text, kind, message, data, voice, ms, speaker, translation, translations; case isPrivate = "private"; case speakerName = "speaker_name"; case lazyVoice = "lazy_voice" }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         type = try c.decode(String.self, forKey: .type)
@@ -243,6 +255,7 @@ struct ChatEvent: Decodable {
         song = kind == "song" ? try? c.decodeIfPresent(SongCardData.self, forKey: .data) : nil
         stickerID = kind == "sticker" ? (try? c.decodeIfPresent(StickerRef.self, forKey: .data))?.stickerID : nil
         voice = try? c.decodeIfPresent(VoiceRef.self, forKey: .voice)
+        lazyVoice = try? c.decodeIfPresent(VoiceRef.self, forKey: .lazyVoice)
         ms = try? c.decodeIfPresent(Int.self, forKey: .ms)
         speaker = try? c.decodeIfPresent(UUID.self, forKey: .speaker)
         speakerName = try? c.decodeIfPresent(String.self, forKey: .speakerName)

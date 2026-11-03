@@ -51,7 +51,10 @@ targets:
         NSCameraUsageDescription: 用于在聊天里直接拍照发给 TA。
         NSPhotoLibraryUsageDescription: 用于从相册选照片发给 TA。
         NSFaceIDUsageDescription: 打开隐私相册和上锁的抽屉时验证是你。
-        NSMicrophoneUsageDescription: 按住麦克风给 TA 发语音时录音。
+        NSMicrophoneUsageDescription: 按住麦克风给 TA 发语音时录音；给 TA 打电话时听你说话。
+        # 语音通话（10-31）：边说边出灰字用 iPhone 自带的识别（会经过苹果的识别服务）；锁屏 / 切走时电话不断
+        NSSpeechRecognitionUsageDescription: 给 TA 打电话时，把你正在说的话先变成字显示出来（用 iPhone 自带的语音识别，会经过苹果的识别服务）。
+        UIBackgroundModes: [audio, voip]
         NSHealthShareUsageDescription: 首页健康小组件显示步数、距离、活动消耗、睡眠、心率；你打开「步数和睡眠」后，TA 聊天时知道你今天走了多少、昨晚睡了多久（只读）。
         NSHealthUpdateUsageDescription: Mele Lite 不会往「健康」里写任何数据，只读步数、睡眠等给首页小组件看。
         NSAppleMusicUsageDescription: 让 TA 知道你在「音乐」里放什么歌。

@@ -66,6 +66,35 @@ class ElevenLabs:
         r = await self._req("POST", f"/v1/text-to-speech/{voice_id}", params={"output_format": "mp3_44100_128"}, json=body)
         return r.content
 
+    async def stream_pcm(self, text: str, voice_id: str, model: str, previous_text: str | None = None):
+        """电话（10-31）：流式合成，边合成边吐 24k 16 位单声道 PCM。第一块到了就往手机推，不等整句。
+        这个模型不收流式（400）就退回整句合成，切块照样吐。"""
+        body: dict = {"text": text, "model_id": model, "voice_settings": {"stability": 0.5}}
+        if previous_text:
+            body["previous_text"] = previous_text
+        client = self._client or httpx.AsyncClient(timeout=httpx.Timeout(20, read=30))
+        try:
+            for path in (f"/v1/text-to-speech/{voice_id}/stream", f"/v1/text-to-speech/{voice_id}"):
+                try:
+                    async with client.stream("POST", self.base + path, params={"output_format": "pcm_24000"},
+                                             headers={"xi-api-key": self.key}, json=body) as r:
+                        if r.status_code >= 400:
+                            err = (await r.aread()).decode(errors="ignore")
+                            if r.status_code == 400 and path.endswith("/stream"):
+                                continue
+                            if "missing_permissions" in err:
+                                raise TTSError("missing_permissions", err[:300])
+                            raise TTSError(_kind(r.status_code), err[:300])
+                        async for chunk in r.aiter_bytes():
+                            yield chunk
+                        return
+                except httpx.HTTPError as e:
+                    raise TTSError("network", str(e)) from e
+            raise TTSError("bad_request", "stream refused")
+        finally:
+            if self._client is None:
+                await client.aclose()
+
     async def premade(self) -> list[dict]:
         r = await self._req("GET", "/v1/voices")
         return [{"voice_id": v["voice_id"], "name": v.get("name", ""), "labels": v.get("labels") or {},
@@ -128,6 +157,12 @@ class FakeTTS:
         self.calls.append(("synth", text, voice_id, model, previous_text, next_text))
         self._maybe_fail()
         return b"ID3fake" + text.encode()
+
+    async def stream_pcm(self, text, voice_id, model, previous_text=None):
+        self.calls.append(("stream", text, voice_id, model, previous_text))
+        self._maybe_fail()
+        for i in range(0, 9600, 4800):           # 0.2 秒的安静，分两块吐
+            yield bytes(4800)
 
     async def premade(self) -> list[dict]:
         self.calls.append(("premade",))

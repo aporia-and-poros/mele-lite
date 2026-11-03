@@ -16,8 +16,8 @@ FACTORY = {
     "en": "What I really feel right after saying it: honest, blunt, unpolished. Write the part I didn't say out loud — what I meant instead, what I held back, what I'm secretly pleased about. A few lines is enough. First person; {p} stays \"{p}\", never \"you\".",
 }
 RULES = {
-    "zh": "【心声】每次回复说完以后，最后面再写一段心声，放在 [心声] 和 [/心声] 之间：\n{style}\n心声只是给{p}看的心里话，不算说出口的话；正文里不提心声。写完用 [/心声] 收尾，后面不再写字。",
-    "en": "[Inner voice] After every reply, at the very end, write an inner voice between [inner voice] and [/inner voice]:\n{style}\nIt's what I feel, not something I said; the reply itself never mentions it. Close it with [/inner voice] and write nothing after.",
+    "zh": "【心声】每次回复说完以后，最后面再写一段心声，放在 [心声] 和 [/心声] 之间：\n{style}\n心声只写这一轮的反应，不接着前几轮的心声往下写；已经说开、改正了的事，不再翻出来纠结。\n心声只是给{p}看的心里话，不算说出口的话；正文里不提心声。写完用 [/心声] 收尾，后面不再写字。",
+    "en": "[Inner voice] After every reply, at the very end, write an inner voice between [inner voice] and [/inner voice]:\n{style}\nIt's only about this turn: don't carry on from earlier inner voices, and don't keep going back to something already cleared up or corrected.\nIt's what I feel, not something I said; the reply itself never mentions it. Close it with [/inner voice] and write nothing after.",
 }
 HOOK = {"zh": "〔心声〕说完以后，最后写 [心声]…[/心声]，写完收尾。",
         "en": "〔Inner voice〕After the reply, end with [inner voice]…[/inner voice]."}
@@ -42,6 +42,7 @@ def split(text: str) -> tuple[str, str]:
         c = _CLOSE.search(rest, o.end())
         voice = rest[o.end():c.start() if c else len(rest)].strip()
         rest = rest[:o.start()] + (rest[c.end():] if c else "")
+    rest = _CLOSE.sub("", rest)     # 落单的收尾（开头被别的切法拿走了，11-03 内测截图气泡里只剩 [/心声]）：只删标记
     return rest.strip(), voice
 
 
@@ -49,8 +50,19 @@ def _lang(settings: Settings) -> str:
     return settings.lang if settings.lang in RULES else "en"
 
 
+# 本体化（11-03 Aporia：我们加的风格都去掉，用户自己写的照用，功能照留）：照样写心声，只剩格式；用户写了心声写法就接在后面
+BARE_RULES = {
+    "zh": "【心声】每次回复说完以后，最后面再写一段心声，放在 [心声] 和 [/心声] 之间。{style}心声不算说出口的话，正文里不提心声。写完用 [/心声] 收尾，后面不再写字。",
+    "en": "[Inner voice] After every reply, at the very end, write an inner voice between [inner voice] and [/inner voice]. {style}It isn't something you said; "
+          "the reply itself never mentions it. Close it with [/inner voice] and write nothing after.",
+}
+
+
 def rules(settings: Settings) -> str:
     lang, p = _lang(settings), _forms(settings)["p"]
+    if settings.bare_mode:
+        own = settings.inner_voice_style.strip()
+        return BARE_RULES[lang].format(style=f"\n{own}\n" if own else "")
     style = settings.inner_voice_style.strip() or FACTORY[lang].format(p=p)
     return RULES[lang].format(style=style, p=p)
 

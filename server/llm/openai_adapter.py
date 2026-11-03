@@ -66,6 +66,8 @@ class OpenAIAdapter:
                 if d is not None:
                     if d.content:
                         text.append(d.content)
+                        if req.on_text:
+                            req.on_text(d.content)
                     rc = getattr(d, "reasoning_content", None)
                     if rc:
                         thinking.append(rc)

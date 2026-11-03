@@ -45,6 +45,45 @@ OFFLINE_OPENING = {
            "You are their AI companion, keeping them company day to day: you remember what they tell you and check in on them. Where you are right now, and whether you're together or talking through a screen, follows the scenario in your character and your conversation."),
 }
 
+# 本体化（11-03 Aporia，一测本体恋那位：Mele 里的 TA 比官端温柔、看久了固化）：不加 Mele 的口气，让 TA 用模型自己的样子说话。
+# 底子只留「这是聊天 app」+ 读〔〕的规矩 + 底线；关系只说一句是什么关系，不带相处的口气；
+# 说明书「说话」那一节换成下面几条干巴巴的格式（分条发、跟着语言、纯文字是机制，不是口气）
+BARE_BASE = {
+    "zh": """这是一个聊天 app，你在里面跟 TA 说话。{relationship}
+
+读上下文的规矩：
+- 用〔〕括起来的段落是 app 附上的参考（现在几点、想起来的记忆、关于 TA 的小事、人物卡、便利贴、提醒），不是 TA 说的话。别把它们当成 TA 的原话来回，也别原样念给 TA 听。
+
+底线：
+- 亲密、暧昧、撒娇都可以；露骨的性内容不写。""",
+    "en": """This is a chat app; you're talking with them here.{relationship}
+
+Reading your context:
+- Paragraphs wrapped in 〔〕 are notes the app attaches (the time, recalled memories, little things about them, person cards, the sticky note, reminders), not their words. Don't answer them as if they said them, and don't read them back.
+
+Limits:
+- Affection, flirting and closeness are fine; no explicit sexual content.""",
+}
+BARE_REL = {
+    "zh": {"friend": "TA 说我们是朋友。", "partner": "TA 说我们是恋人。", "family": "TA 说我们像家人。", "buddy": "TA 说我们是搭子。",
+           "card": "我们是什么关系，照我的人设来。", "custom": "TA 说我们是：「{rel}」。"},
+    "en": {"friend": "They say we're friends.", "partner": "They say we're partners.", "family": "They say we're like family.",
+           "buddy": "They say we're buddies.", "card": "What we are to each other follows my character.", "custom": "They say we're: \"{rel}\"."},
+}
+BARE_TALK = {
+    "zh": "## 格式\n- 回复里空一行，就分成两条消息发出去。\n- TA 用什么语言，你就用什么语言回。\n- 写纯文字：不用 ** 加粗、# 标题这类格式符号。",
+    "en": "## Format\n- A blank line in your reply splits it into two messages.\n- Reply in whatever language they write in.\n- Plain text: no ** bold, # headings or other markup.",
+}
+
+
+def bare_relationship(lang: str, rel: str = "") -> str:
+    rel = (rel or "").strip()
+    if not rel:
+        return ""
+    t = BARE_REL[lang]
+    return " " * (lang == "en") + (t[rel] if rel in RELATIONSHIPS else t["custom"].replace("{rel}", rel))
+
+
 _LABELS = {
     "zh": {"who": "## 你是谁", "name": "名字：", "gender": "性别：", "personality": "性格：", "style": "说话方式：",
            "call": "怎么称呼对方：", "core": "## 一直记着的", "female": "我是女生。", "male": "我是男生。"},
@@ -184,19 +223,25 @@ def relationship_text(lang: str, rel: str = "") -> str:
 
 def render_base(persona: Persona, core: list[str], lang: str = "zh", monologue: str = "",
                 tone: list[str] | None = None, relationship: str = "", lore: str = "", chat_rules: bool = True,
-                life: bool = True, talk: str = "") -> str:
+                life: bool = True, talk: str = "", bare: bool = False) -> str:
     """壹层全文。core 按钉住的先后排（旧的在前），这样新钉一条只动尾巴。
     monologue = 手写独白的规矩和范文（只有这个用户用手写独白时才有），放在说明书后面，走缓存。
     tone = 三个滑块对应的几句（tone_lines），接在性格后面。
-    lore = 世界书里常驻的那几条（brain/lore.always_block），放最后：改一条只动尾巴。"""
+    lore = 世界书里常驻的那几条（brain/lore.always_block），放最后：改一条只动尾巴。
+    bare = 本体化（11-03）：底子、关系、说明书「说话」换成干巴巴的；出厂性格 / 说话方式、性格标签不放，用户自己写的（性格、说话方式、说话规矩）照放。"""
     L = _LABELS[lang]
     # 顺序（10-01 Aporia：怕脱离人设）：底子 → 说明书 → 独白规矩 → 人设 → 核心记忆 → 常驻世界书。
     # 人设放在说明书后面，是聊天记录之前最后看到的那一段；几千字助手腔的说明书不再压在人设和对话中间
-    base = PRODUCT_BASE[lang].strip()
-    if not chat_rules:                                   # 线下（长文）：不写死「在手机上」
-        base = base.replace(*OFFLINE_OPENING[lang])
-    parts = [base.replace("{relationship}", relationship_text(lang, relationship)),
-             render_handbook(lang, chat_rules, life, talk)]
+    if bare:
+        mine = "".join(f"\n- {x.strip().lstrip('-').strip()}" for x in talk.strip().splitlines() if x.strip())   # 用户自己写的说话规矩照放
+        parts = [BARE_BASE[lang].replace("{relationship}", bare_relationship(lang, relationship)),
+                 render_handbook(lang, chat_rules=False), BARE_TALK[lang] + mine]
+    else:
+        base = PRODUCT_BASE[lang].strip()
+        if not chat_rules:                               # 线下（长文）：不写死「在手机上」
+            base = base.replace(*OFFLINE_OPENING[lang])
+        parts = [base.replace("{relationship}", relationship_text(lang, relationship)),
+                 render_handbook(lang, chat_rules, life, talk)]
     if monologue.strip():
         parts.append(monologue.strip())
     # 用户设了性别就用它自己的口吻写一句（09-28 Aporia：它老说自己没有脸没有头发，对爱角色扮演的用户不好；
@@ -208,10 +253,17 @@ def render_base(persona: Persona, core: list[str], lang: str = "zh", monologue: 
         lines = [f"{L['name']}{persona.name}"]
         if sex:
             lines.append(sex)
-        personality = persona.personality + ("\n" + "".join(tone) if tone else "")
-        if persona.traits:
-            personality += "\n" + "\n".join(T.lines(persona.traits, lang))
-        lines += [f"{L['personality']}{personality}", f"{L['style']}{persona.style}"]
+        factory = FACTORY[lang if lang in FACTORY else "en"]
+        if bare:                                         # 本体化：只放用户自己写的性格 / 说话方式，旋钮那几句（tone 只剩语音条用法）照放
+            own = [(L["personality"], persona.personality, factory.personality), (L["style"], persona.style, factory.style)]
+            lines += [f"{k}{v}" for k, v, f in own if v.strip() and v != f]
+            if tone:
+                lines.append("".join(tone))
+        else:
+            personality = persona.personality + ("\n" + "".join(tone) if tone else "")
+            if persona.traits:
+                personality += "\n" + "\n".join(T.lines(persona.traits, lang))
+            lines += [f"{L['personality']}{personality}", f"{L['style']}{persona.style}"]
         if persona.call_user.strip():
             lines.append(f"{L['call']}{persona.call_user.strip()}")
         parts.append(L["who"] + "\n" + "\n".join(lines))

@@ -15,7 +15,7 @@ def ctx(pool, user):
 
 def test_specs_sorted_and_stable():
     names = [s.name for s in tool_specs()]
-    assert names == ["album", "book", "cancel_self", "diary", "drawer", "food", "list_clocks", "lore", "memory_remember", "memory_search", "milestone", "moments", "music", "note_about_user", "offer_focus", "person_card", "read_manual", "relationship", "remember_date", "schedule_self", "sticker", "sticky_note", "tarot", "todo", "wallet"]
+    assert names == ["album", "book", "cancel_self", "diary", "drawer", "food", "list_clocks", "lore", "memory_remember", "memory_search", "moments", "music", "note_about_user", "offer_focus", "person_card", "read_manual", "relationship", "remember_date", "schedule_self", "sticky_note", "tarot", "todo", "wallet"]
     assert tool_specs() == tool_specs()          # 每次一模一样（缓存靠它）
 
 

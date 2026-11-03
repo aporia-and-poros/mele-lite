@@ -25,19 +25,21 @@ enum PushRelay {
     }
 
     /// 去中转站登记这个设备号（同一个设备号登记过就用存着的）。返回 (编号, 口令)
-    static func register(token: String) async -> (id: String, secret: String)? {
+    /// voip = 来电用的那个设备号（10-31，PushKit）：中转站只往它身上推来电
+    static func register(token: String, voip: Bool = false) async -> (id: String, secret: String)? {
         let d = UserDefaults.standard
-        if d.string(forKey: "relay.token") == token, let id = d.string(forKey: "relay.id"), let s = d.string(forKey: "relay.secret") {
+        let p = voip ? "relay.voip." : "relay."
+        if d.string(forKey: p + "token") == token, let id = d.string(forKey: p + "id"), let s = d.string(forKey: p + "secret") {
             return (id, s)
         }
         var req = URLRequest(url: base.appendingPathComponent("register"), timeoutInterval: 10)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try? JSONSerialization.data(withJSONObject: ["token": token, "sandbox": sandbox])
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["token": token, "sandbox": sandbox, "voip": voip])
         guard let (data, resp) = try? await URLSession.shared.data(for: req), (resp as? HTTPURLResponse)?.statusCode == 200,
               let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let id = j["relay_id"] as? String, let secret = j["relay_secret"] as? String else { return nil }
-        d.set(token, forKey: "relay.token"); d.set(id, forKey: "relay.id"); d.set(secret, forKey: "relay.secret")
+        d.set(token, forKey: p + "token"); d.set(id, forKey: p + "id"); d.set(secret, forKey: p + "secret")
         return (id, secret)
     }
 }

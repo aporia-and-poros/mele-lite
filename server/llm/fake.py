@@ -27,6 +27,9 @@ class FakeModel:
                  for i, (name, args) in enumerate(item.get("calls", []))]
         prompt = sum(len(b.text) for b in req.system) + sum(len(m.text) for m in req.messages)
         text = item.get("text", "")
+        if req.on_text and text:                     # 电话（10-31）：假装一个字一个字地推
+            for ch in text:
+                req.on_text(ch)
         usage = item.get("usage") or Usage(input=prompt, output=len(text))
         return Reply(text=text, thinking=item.get("thinking", ""), tool_calls=calls, usage=usage,
                      stop="tool_use" if calls else "end_turn",

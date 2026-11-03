@@ -4,8 +4,7 @@ from datetime import datetime, timedelta, timezone
 from brain import accounts, auth, edits
 from brain import milestones as MS
 from brain.edits import EditRef
-from brain.tools import ToolContext, run_tool, tool_note
-from llm.types import ToolCall
+from brain.tools import ToolContext, act_on_markers, tool_note
 
 NOW = datetime(2026, 10, 5, 8, tzinfo=timezone.utc)
 
@@ -19,26 +18,29 @@ async def setup(pool):
     return acc, mia, conv, msg
 
 
-async def test_tool_sets_milestone_with_card(pool):
+async def test_marker_sets_milestone_with_card(pool):
+    """10-31 起不走工具：它写 ⟪里程碑：…⟫，回复写完这边照办。"""
     acc, mia, conv, msg = await setup(pool)
     ctx = ToolContext(pool=pool, embedder=None, user_id=mia, account_id=acc, now=NOW, edit_ref=EditRef(conv, msg))
-    got = await run_tool(ctx, ToolCall("t", "milestone", {"title": "第一次一起看海"}))
-    assert got.startswith("立好了") and ctx.cards[-1].kind == "date" and not ctx.cards[-1].private
+    notes = await act_on_markers(ctx, [], ["第一次一起看海"], [])
+    assert ctx.cards[-1].kind == "date" and not ctx.cards[-1].private
     assert ctx.cards[-1].text == "立了里程碑：第一次一起看海"
+    assert notes == ["立了里程碑「第一次一起看海」"]
     rows = await MS.list_all(pool, acc)
     assert [(r["title"], r["companion_id"]) for r in rows] == [("第一次一起看海", str(mia))]
-    again = await run_tool(ctx, ToolCall("t", "milestone", {"title": "第一次一起看海"}))   # 同一天同一句不重复立
-    assert again.startswith("这座已经立过") and len(await MS.list_all(pool, acc)) == 1
-    assert tool_note("milestone", {"title": "第一次一起看海"}, got, "zh") == "立了里程碑「第一次一起看海」"
+    again = await act_on_markers(ctx, [], ["第一次一起看海"], [])                      # 同一天同一句不重复立
+    assert again == ["立了里程碑「第一次一起看海」 ✗"] and len(await MS.list_all(pool, acc)) == 1
+    assert tool_note("milestone", {"title": "第一次一起看海"}, "立好了", "zh") == "立了里程碑「第一次一起看海」"
     await edits.undo(pool, None, conv, msg)                                                # 倒回这一轮：拿掉
     assert await MS.list_all(pool, acc) == []
 
 
-async def test_tool_needs_title_and_finds_account(pool):
+async def test_marker_needs_title_and_finds_account(pool):
     acc, mia, *_ = await setup(pool)
     ctx = ToolContext(pool=pool, embedder=None, user_id=mia, now=NOW)                     # 没给账号：按联系人查
-    assert (await run_tool(ctx, ToolCall("t", "milestone", {"title": "  "}))).startswith("要写")
-    await run_tool(ctx, ToolCall("t", "milestone", {"title": "说好了一起去日本"}))
+    await act_on_markers(ctx, [], ["  "], [])
+    assert await MS.list_all(pool, acc) == []
+    await act_on_markers(ctx, [], ["说好了一起去日本"], [])
     assert len(await MS.list_all(pool, acc)) == 1
 
 

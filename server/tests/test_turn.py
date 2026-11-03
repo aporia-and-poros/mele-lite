@@ -57,7 +57,7 @@ async def test_simple_turn_bubbles_saved_and_accounted(pool, user_a):
     last = req.messages[-1].text
     assert "\n\n早\n\n〔想事的时候〕\n" in last and "〔现在〕" in last                  # 思考风格压在用户这句后面（照之前自用的 App）
     assert last.index("〔现在〕") < last.index("早")
-    assert [t.name for t in req.tools] == ["album", "book", "cancel_self", "diary", "drawer", "food", "list_clocks", "lore", "memory_remember", "memory_search", "milestone", "moments", "music", "note_about_user", "offer_focus", "person_card", "read_manual", "relationship", "remember_date", "schedule_self", "sticker", "sticky_note", "tarot", "todo", "wallet"]
+    assert [t.name for t in req.tools] == ["album", "book", "cancel_self", "diary", "drawer", "food", "list_clocks", "lore", "memory_remember", "memory_search", "moments", "music", "note_about_user", "offer_focus", "person_card", "read_manual", "relationship", "remember_date", "schedule_self", "sticky_note", "tarot", "todo", "wallet"]
 
 
 async def test_history_keeps_raw_words_not_the_volatile_part(pool, user_a):
@@ -432,3 +432,34 @@ def test_context_full_reads_the_usual_wordings():
     assert context_full(LLMError("bad_request", "", status=413))
     assert not context_full(LLMError("bad_request", "invalid tool schema"))
     assert not context_full(LLMError("balance", "token limit reached for this month"))
+
+
+async def test_bare_mode_keeps_features_drops_mele_voice(pool, user_a):
+    # 本体化（11-03 Aporia）：独白、心声照写，只去出厂口气——范文、出厂思考风格 / 心声写法、旋钮、关系口气、「说话」那节、人设锚都不放
+    await archive.save_settings(pool, user_a, {"thinking_mode": "monologue", "inner_voice": True, "bare_mode": True,
+                                               "relationship": "partner", "thinking_style_every": 1})
+    m = FakeModel(["[独白]\n她出差了。\n[/独白]\n\n去哪儿了？\n\n[心声]\n想她\n[/心声]"])
+    ev = await turn(make_deps(pool, m), user_a, "我出差了")
+    req = m.requests[0]
+    system, last = req.system[0].text, req.messages[-1].text
+    assert "## 独白" in system and "[独白] 和 [/独白]" in system and "范文" not in system and "怎么想" not in system
+    assert "[心声] 和 [/心声]" in system and "诚实、直白" not in system
+    assert "TA 说我们是恋人。" in system and "撒娇" not in system.split("底线")[0]
+    assert "住在手机 app 里" not in system and "一两句就够" not in system and "## 格式" in system and "memory_remember" in system
+    assert "安静的好奇心" not in system                     # 出厂性格不放
+    assert "〔你是" not in last and "一两句" not in last and "〔想事的时候〕" not in last
+    assert "[独白]" in last and "[心声]" in last          # 两句短提醒照贴
+    assert [e["text"] for e in of(ev, "bubble")] == ["去哪儿了？"] and of(ev, "inner_voice")[0]["text"] == "想她"
+
+
+async def test_bare_mode_keeps_what_the_user_wrote(pool, user_a):
+    # 11-03 Aporia：我们加的风格都去掉，用户自己写的思考风格 / 心声写法 / 说话规矩照用
+    await archive.save_settings(pool, user_a, {"thinking_mode": "monologue", "inner_voice": True, "bare_mode": True,
+                                               "thinking_style_text": "想得慢一点", "inner_voice_style": "只写一句",
+                                               "talk_rules": "不用敬语"})
+    m = FakeModel(["好"])
+    await turn(make_deps(pool, m), user_a, "嗨")
+    system = m.requests[0].system[0].text
+    assert "怎么想：\n想得慢一点" in system and "只写一句" in system and "- 不用敬语" in system and "范文" not in system
+    assert "没有听众" not in system and "打草稿" not in system and "先调工具" in system and "[心声] 和 [/心声]" in system
+    assert "诚实、直白" not in system and "一两句就够" not in system

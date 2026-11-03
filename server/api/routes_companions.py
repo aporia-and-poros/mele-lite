@@ -239,9 +239,10 @@ async def _conv_row(a: Api, c: accounts.Conversation) -> dict:
     last = next((m for m in reversed(await archive.recent(a.deps.pool, c.id, 3)) if m.role != "wake"), None)
     first = await a.deps.pool.fetchval("SELECT text FROM chat_messages WHERE user_id = $1 AND role <> 'wake' "
                                        "ORDER BY id LIMIT 1", c.id)
+    # 最后一条是电话挂断那条：列表里写「📞 通话时长」，不写纸条（10-31）
     return {"id": str(c.id), "companion_id": str(c.companion_id), "incognito": c.incognito,
             "created_at": c.created_at.isoformat(), "last_at": c.last_at.isoformat(),
-            "preview": last.text[:40] if last else "", "title": c.title, "first": (first or "")[:20]}
+            "preview": (((last.call or {}).get("line") or last.text[:40]) if last else ""), "title": c.title, "first": (first or "")[:20]}
 
 
 @router.get("/companions/{cid}/conversations")

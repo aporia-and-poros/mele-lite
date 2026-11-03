@@ -152,3 +152,27 @@ def test_untagged_list_reply_stays_in_body():
     mono, body = recover_untagged(t, "她", True)
     assert mono == "她半夜突然问这个，肯定不是认真做问卷。我先挑那种有画面的。"
     assert body.startswith("哼，色色问卷是吧。") and "2. 她说完一句话" in body and body.endswith("老婆。")
+
+
+def test_untagged_keeps_inner_voice_1103():
+    # 11-03 内测截图：正文一个「你」都没有、心声里提到「她」——正文连心声进了思考，气泡只剩 [/心声]。跟 Lite MonologueUntaggedInnerVoice1103 同一组
+    from brain import inner_voice
+    from brain.monologue import recover_untagged, split_monologue
+    said = "出差啊。去哪儿了，几天回来？\n\n[心声]\n其实我更想问上礼拜说好的那顿豆花还算不算。\n但这话太沉，我想等她先开口。\n[/心声]"
+    m, b = split_monologue(said)
+    rm, rb = recover_untagged(b, "她", True)
+    assert m == "" and rm == ""
+    assert inner_voice.split(rb) == ("出差啊。去哪儿了，几天回来？", "其实我更想问上礼拜说好的那顿豆花还算不算。\n但这话太沉，我想等她先开口。")
+    rm2, rb2 = recover_untagged("她出差了，我有点闷。\n路上小心。\n\n[心声]\n想她\n[/心声]", "她", True)
+    assert rm2 == "她出差了，我有点闷。" and inner_voice.split(rb2) == ("路上小心。", "想她")
+    assert inner_voice.split("嗯。\n[/心声]") == ("嗯。", "")
+
+
+def test_own_examples_replace_ours_1103():
+    # 11-03 Aporia：用户自己写的范文换掉我们那两段；本体化时也照放；没套标签的替它套上。跟 Lite BareModeTests.ownExamplesReplaceOurs 同一组
+    from brain.monologue import rules
+    from brain.settings import Settings
+    r = rules(Settings(monologue_examples="她今天话很少。{笑}"), "想慢点")
+    assert "范文（照这个写法，内容别照抄）：\n\n[独白]\n她今天话很少。{笑}\n[/独白]" in r and "可乐鸡翅" not in r
+    assert rules(Settings(bare_mode=True, monologue_examples="[独白]\n嗯。\n[/独白]"), "").endswith("[独白]\n嗯。\n[/独白]")
+    assert "可乐鸡翅" in rules(Settings(), "想慢点") and "可乐鸡翅" not in rules(Settings(bare_mode=True), "")

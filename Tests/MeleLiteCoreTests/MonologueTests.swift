@@ -145,3 +145,18 @@ struct MonologueUntagged1016 {
         #expect(Monologue.spokenOnly("[独白]她累了[/独白]\n她嘴上说没事。\n你先睡", pronoun: "她", zh: true) == "你先睡")
     }
 }
+
+/// 11-03 内测截图：正文一个「你」都没有、心声里提到「她」——正文连心声进了思考，气泡只剩 [/心声]。跟 Host test_untagged_keeps_inner_voice_1103 同一组
+struct MonologueUntaggedInnerVoice1103 {
+    @Test func bodyAndVoiceSurvive() {
+        let said = "出差啊。去哪儿了，几天回来？\n\n[心声]\n其实我更想问上礼拜说好的那顿豆花还算不算。\n但这话太沉，我想等她先开口。\n[/心声]"
+        let (m, b) = Monologue.split(said)
+        let r = Monologue.recoverUntagged(b, pronoun: "她", zh: true)
+        #expect(m.isEmpty && r.monologue.isEmpty)
+        #expect(InnerVoice.split(r.body) == ("出差啊。去哪儿了，几天回来？", "其实我更想问上礼拜说好的那顿豆花还算不算。\n但这话太沉，我想等她先开口。"))
+        // 前面真有漏的心里话：照切，心声原样接在正文后面
+        let r2 = Monologue.recoverUntagged("她出差了，我有点闷。\n路上小心。\n\n[心声]\n想她\n[/心声]", pronoun: "她", zh: true)
+        #expect(r2.monologue == "她出差了，我有点闷。" && InnerVoice.split(r2.body) == ("路上小心。", "想她"))
+        #expect(InnerVoice.split("嗯。\n[/心声]") == ("嗯。", ""))       // 落单的收尾只删标记
+    }
+}

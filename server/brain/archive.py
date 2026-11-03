@@ -13,7 +13,7 @@ import asyncpg
 from llm.types import Usage
 
 SCHEMA_FILE = Path(__file__).with_name("schema.sql")
-_MSG_COLS = "id, role, text, thinking, created_at, tools, parts, cards, thinking_ms, inner_voice, speaker_id, speaker_name, translations"
+_MSG_COLS = "id, role, text, thinking, created_at, tools, parts, cards, thinking_ms, inner_voice, speaker_id, speaker_name, translations, call"
 _JSON_TABLES = ("user_settings", "user_state")
 USER_SIDE = ("user", "wake")      # 历史里算用户那一侧的：TA 说的话、叫醒它的〔醒来〕
 _ALL_TABLES = ("chat_messages", "ledger_days", "user_settings", "user_state", "personas", "turn_logs",
@@ -35,6 +35,7 @@ class StoredMsg:
     speaker: UUID | None = None      # 群里是哪个 TA 说的（10-11）；私聊是 None
     speaker_name: str = ""
     translations: list | None = None     # 双语气泡（10-15）：跟气泡一一对应的译文
+    call: dict | None = None             # 电话（10-31）：{id, cut, end, seconds, line}；不是电话里的话是 None
 
 
 def _now(now: datetime | None) -> datetime:
@@ -46,7 +47,7 @@ def _msg(r) -> StoredMsg:
         return json.loads(v) if isinstance(v, str) else v
     return StoredMsg(r["id"], r["role"], r["text"], r["thinking"], r["created_at"], r["tools"],
                      js(r["parts"]), js(r["cards"]), r["thinking_ms"], r["inner_voice"] or "",
-                     r["speaker_id"], r["speaker_name"] or "", js(r["translations"]))
+                     r["speaker_id"], r["speaker_name"] or "", js(r["translations"]), js(r["call"]))
 
 
 async def apply_brain_schema(dsn: str) -> None:
@@ -60,15 +61,27 @@ async def apply_brain_schema(dsn: str) -> None:
 async def add_message(pool, user_id: UUID, role: str, text: str, *, thinking: str = "", tools: str = "",
                       parts: list[str] | None = None, cards: list[dict] | None = None,
                       thinking_ms: int | None = None, inner_voice: str = "", now: datetime | None = None,
-                      speaker: UUID | None = None, speaker_name: str = "", translations: list | None = None) -> StoredMsg:
+                      speaker: UUID | None = None, speaker_name: str = "", translations: list | None = None,
+                      call: dict | None = None) -> StoredMsg:
     r = await pool.fetchrow(
         f"INSERT INTO chat_messages (user_id, role, text, thinking, created_at, tools, parts, cards, thinking_ms, inner_voice, "
-        f"speaker_id, speaker_name, translations) "
-        f"VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11, $12, $13::jsonb) RETURNING {_MSG_COLS}", user_id, role, text, thinking,
+        f"speaker_id, speaker_name, translations, call) "
+        f"VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11, $12, $13::jsonb, $14::jsonb) RETURNING {_MSG_COLS}", user_id, role, text, thinking,
         _now(now), tools, json.dumps(parts, ensure_ascii=False) if parts and len(parts) > 1 else None,
         json.dumps(cards, ensure_ascii=False) if cards else None, thinking_ms if thinking.strip() else None, inner_voice,
-        speaker, speaker_name, _translations(translations))
+        speaker, speaker_name, _translations(translations), json.dumps(call, ensure_ascii=False) if call else None)
     return _msg(r)
+
+
+async def set_call_text(pool, message_id: int, text: str, call: dict) -> None:
+    """电话里那句改字（准确转写回来了）/ 它那句改成只留念到的（被打断，10-31）"""
+    await pool.execute("UPDATE chat_messages SET text = $2, call = $3::jsonb WHERE id = $1",
+                       message_id, text, json.dumps(call, ensure_ascii=False))
+
+
+async def get_message(pool, message_id: int) -> StoredMsg | None:
+    r = await pool.fetchrow(f"SELECT {_MSG_COLS} FROM chat_messages WHERE id = $1", message_id)
+    return _msg(r) if r else None
 
 
 def _translations(t: list | None) -> str | None:

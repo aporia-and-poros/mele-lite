@@ -48,6 +48,16 @@ enum LocalChores {
 
     static func patch(_ host: LocalHost, key id: String, _ b: [String: Any]) -> LocalResponse {
         guard let p = live(host)[id] else { return .error(404, String(localized: "没有这把钥匙")) }
+        if let m = b["chat_model"] as? String, p != "elevenlabs" {      // 换聊天模型（10-29 内测：不用再加一把）
+            let model = String(m.trimmingCharacters(in: .whitespacesAndNewlines).prefix(100))
+            guard !model.isEmpty else { return .error(400, String(localized: "要填一个聊天用的模型")) }
+            host.store.write("keys.json", host.keys.map { k in
+                guard (k["id"] as? String) == id else { return k }
+                var k = k
+                k["chat_model"] = model
+                return k
+            })
+        }
         var (t, dm) = table(host)
         var moved: [[String: String]] = []
         if let list = b["chores"] as? [String], p != "elevenlabs" {

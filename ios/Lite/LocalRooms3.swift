@@ -65,7 +65,7 @@ enum LocalRooms3 {
         let id = a["id"] as? Int ?? 0
         return ["id": id, "companion_id": a["companion_id"] ?? "", "source": a["source"] ?? "user", "taken_at": a["taken_at"] ?? "",
                 "caption": a["caption"] ?? "", "felt": a["felt"] ?? "", "why": a["why"] ?? "", "thoughts": a["thoughts"] ?? "",
-                "note": a["note"] ?? "", "batch": a["batch"] ?? NSNull(), "starred": a["starred"] ?? false, "secret": a["secret"] ?? false,
+                "note": a["note"] ?? "", "batch": a["batch"] as? String ?? "",   // 单张存的 batch 是空：给空串，App 那边是 String（10-31 内测：null 让整本相册解不出来） "starred": a["starred"] ?? false, "secret": a["secret"] ?? false,
                 "looking": a["looking"] ?? false, "url": "album/\(id)/image", "thumb": "album/\(id)/image?thumb=1"]
     }
 
@@ -464,23 +464,47 @@ enum LocalRooms3 {
         let due = all.filter { LocalStore.date($0["due"]) <= now }
         s.saveCollection("moment-visits", all.filter { LocalStore.date($0["due"]) > now })
         visitLock.unlock()
+        // 11-03 一测「来访一点动静都没有」：以前摘下来就问模型，失败了（网断、App 刚好被切走挂起、钥匙报错）这一笔就没了，连赞都没有。
+        // 现在没写成的放回去，过 10 分钟再来，最多 3 次
+        var retry: [[String: Any]] = []
         for job in due where now.timeIntervalSince(LocalStore.date(job["due"])) < visitMaxAge {
             guard let cid = job["companion"] as? String, let id = job["moment"] as? Int else { continue }
-            await visit(host, companion: cid, moment: id, replyTo: job["reply_to"] as? Int)
+            if await visit(host, companion: cid, moment: id, replyTo: job["reply_to"] as? Int) { continue }
+            let tries = (job["tries"] as? Int ?? 0) + 1
+            guard tries < 3 else { NSLog("[moments] \(cid) 来 #\(id) 失败 3 次，算了"); continue }
+            var again = job
+            again["tries"] = tries
+            again["due"] = LocalStore.iso(Date().addingTimeInterval(10 * 60))
+            retry.append(again)
+        }
+        if !retry.isEmpty {
+            visitLock.lock()
+            s.saveCollection("moment-visits", s.collection("moment-visits") + retry)
+            visitLock.unlock()
         }
         if !s.collection("moment-visits").isEmpty { scheduleVisits(host) }
     }
 
-    private static func visit(_ host: LocalHost, companion cid: String, moment id: Int, replyTo: Int?) async {
+    /// 来一趟：你发的动态先赞上（不用问模型），再问模型写一句评论。false = 评论没写成、该再来一次
+    private static func visit(_ host: LocalHost, companion cid: String, moment id: Int, replyTo: Int?) async -> Bool {
         let s = host.store
         guard let comp = s.companions.first(where: { ($0["id"] as? String) == cid }),
-              let (provider, key) = host.route(chore: "moments", else: host.quietRoute(for: comp)),
-              !LiteConsent.book.needsAsk(provider),
-              let m = s.collection("moments").first(where: { ($0["id"] as? Int) == id }) else { return }
+              let m = s.collection("moments").first(where: { ($0["id"] as? Int) == id }) else { return true }   // 人 / 动态删了：不用再来
+        if replyTo == nil {
+            _ = update(s, id) { m in
+                var likes = m["likes"] as? [[String: Any]] ?? []
+                if !likes.contains(where: { ($0["who"] as? String) == cid }) { likes.append(["who": cid, "at": LocalStore.iso(Date())]) }
+                m["likes"] = likes
+            }
+        }
+        guard let (provider, key) = host.route(chore: "moments", else: host.quietRoute(for: comp)) else {
+            NSLog("[moments] \(cid) 没有能用的钥匙，只赞不评"); return true
+        }
+        guard !LiteConsent.book.needsAsk(provider) else { NSLog("[moments] \(cid) 这把钥匙还没同意发数据，只赞不评"); return true }
         let comments = m["comments"] as? [[String: Any]] ?? []
         var onMyPost = false
         if let replyTo {
-            guard let mine = comments.first(where: { ($0["id"] as? Int) == replyTo }) else { return }   // 那句被删了
+            guard let mine = comments.first(where: { ($0["id"] as? Int) == replyTo }) else { return true }   // 那句被删了
             onMyPost = mine["reply_to"] is NSNull || mine["reply_to"] == nil
         }
         let zh = ((comp["settings"] as? [String: Any])?["lang"] as? String ?? "zh") == "zh"
@@ -493,20 +517,18 @@ enum LocalRooms3 {
         req.turns = [ChatTurn(role: .user, text: ask)]
         req.maxTokens = 400
         var text = ""
-        do { for try await e in makeClient(provider, key: key).stream(req) { if case .text(let t) = e { text += t } } } catch { return }
-        let said = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        do { for try await e in makeClient(provider, key: key).stream(req) { if case .text(let t) = e { text += t } } } catch {
+            NSLog("[moments] \(cid) 来 #\(id) 问模型失败：\(error)"); return false
+        }
+        let said = Monologue.split(ModelNoise.strip(text)).body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !said.isEmpty else { NSLog("[moments] \(cid) 来 #\(id) 模型什么都没写"); return false }
         _ = update(s, id) { m in
-            if replyTo == nil {
-                var likes = m["likes"] as? [[String: Any]] ?? []
-                if !likes.contains(where: { ($0["who"] as? String) == cid }) { likes.append(["who": cid, "at": LocalStore.iso(Date())]) }
-                m["likes"] = likes
-            }
-            guard !said.isEmpty else { return }
             var cs = m["comments"] as? [[String: Any]] ?? []
             cs.append(["id": s.nextID("moment-comment"), "author": cid, "content": String(said.prefix(300)),
                        "reply_to": replyTo ?? NSNull(), "created_at": LocalStore.iso(Date())])
             m["comments"] = cs
         }
+        return true
     }
 }
 #endif
