@@ -25,18 +25,19 @@ struct AnthropicClient: LLMClient {
     }
 
     /// 缓存书签（10-04）：system 末尾、TA 最新那句末尾（context 之前）、这一轮最后一块（用工具来回时）。1 小时档。
-    static var cacheMark: [String: Any] { ["type": "ephemeral", "ttl": "1h"] }
+    /// 走中转站（11-03）不带 ttl：1 小时档是新参数，中转最可能不认、一不认整句就发不出去；普通 5 分钟档各家都认
+    var cacheMark: [String: Any] { config.baseURL?.isEmpty == false ? ["type": "ephemeral"] : ["type": "ephemeral", "ttl": "1h"] }
 
     func messages(_ r: ChatRequest) -> [[String: Any]] {
         var msgs = r.turns.map(message)
         if let ci = r.contextIndex, var content = msgs[ci]["content"] as? [[String: Any]], !content.isEmpty {
-            content[content.count - 1]["cache_control"] = Self.cacheMark
+            content[content.count - 1]["cache_control"] = cacheMark
             if !r.context.isEmpty { content.append(["type": "text", "text": r.context]) }
             msgs[ci]["content"] = content
         }
         if let last = msgs.indices.last, last != r.contextIndex, var content = msgs[last]["content"] as? [[String: Any]], !content.isEmpty,
            content[content.count - 1]["type"] as? String != "thinking" {
-            content[content.count - 1]["cache_control"] = Self.cacheMark
+            content[content.count - 1]["cache_control"] = cacheMark
             msgs[last]["content"] = content
         }
         return msgs
@@ -44,7 +45,7 @@ struct AnthropicClient: LLMClient {
 
     func body(_ r: ChatRequest) -> [String: Any] {
         var system: [[String: Any]] = []
-        if !r.system.isEmpty { system.append(["type": "text", "text": r.system, "cache_control": Self.cacheMark]) }
+        if !r.system.isEmpty { system.append(["type": "text", "text": r.system, "cache_control": cacheMark]) }
         if r.contextIndex == nil, !r.context.isEmpty { system.append(["type": "text", "text": r.context]) }
         var b: [String: Any] = [
             "model": config.model,
@@ -66,11 +67,22 @@ struct AnthropicClient: LLMClient {
         return b
     }
 
+    /// 中转站的 Claude 原生接口（11-03 一测：中转只能走 OpenAI 那条，没有缓存，每句全价）：
+    /// 地址填到域名或 /v1 都行，统一接成 …/v1/messages；没填就是官方
+    public static func endpoint(_ base: String?) -> URL {
+        var b = (base ?? "").trimmingCharacters(in: .whitespaces)
+        while b.hasSuffix("/") { b.removeLast() }
+        if b.hasSuffix("/messages") { b.removeLast("/messages".count) }
+        if b.hasSuffix("/v1") { b.removeLast(3) }
+        return URL(string: (b.isEmpty ? "https://api.anthropic.com" : b) + "/v1/messages") ?? URL(string: "https://api.anthropic.com/v1/messages")!
+    }
+
     func stream(_ r: ChatRequest) -> AsyncThrowingStream<StreamEvent, Error> {
-        var req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
+        var req = URLRequest(url: Self.endpoint(config.baseURL))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "content-type")
         req.setValue(key, forHTTPHeaderField: "x-api-key")
+        if config.baseURL?.isEmpty == false { req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization") }   // 中转站有的认这个
         req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         req.httpBody = try? JSONSerialization.data(withJSONObject: body(r), options: [.sortedKeys])   // 键顺序固定：Swift 字典每次排法不一样，工具说明一变前缀就对不上、缓存全丢（10-08 Aporia：命中只有两三成）
         let st = StreamState()

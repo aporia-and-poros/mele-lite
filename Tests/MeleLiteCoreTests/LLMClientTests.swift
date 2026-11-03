@@ -188,3 +188,12 @@ private func run(_ cfg: ProviderConfig, _ reply: StubProtocol.Reply, image: Data
         #expect(c.endpoint.absoluteString == "https://api.openai.com/v1/chat/completions")
     }
 }
+
+/// 中转站的 Claude 原生接口（11-03）：地址怎么填都接成 …/v1/messages
+@Test func anthropicRelayEndpoint() {
+    #expect(AnthropicClient.endpoint(nil).absoluteString == "https://api.anthropic.com/v1/messages")
+    #expect(AnthropicClient.endpoint("").absoluteString == "https://api.anthropic.com/v1/messages")
+    for b in ["https://aihubmix.com", "https://aihubmix.com/", "https://aihubmix.com/v1", "https://aihubmix.com/v1/", "https://aihubmix.com/v1/messages"] {
+        #expect(AnthropicClient.endpoint(b).absoluteString == "https://aihubmix.com/v1/messages", "\(b)")
+    }
+}

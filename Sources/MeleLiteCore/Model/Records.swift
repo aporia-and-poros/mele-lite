@@ -12,7 +12,7 @@ public enum ProviderKind: String, Codable, Sendable { case anthropic, openai, ge
 
 public struct ProviderConfig: Codable, Equatable, Sendable {
     public var kind: ProviderKind
-    /// 只有 OpenAI 兼容用得上：DeepSeek、OpenRouter 之类填自己的地址
+    /// OpenAI 兼容填自己的地址（DeepSeek、OpenRouter 之类）；Claude 走中转站时填中转的地址（11-03），空着是官方
     public var baseURL: String?
     public var model: String
     public var thinking: Bool

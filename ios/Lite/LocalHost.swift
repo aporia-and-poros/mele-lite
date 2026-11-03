@@ -188,7 +188,7 @@ final class LocalHost: @unchecked Sendable {
         let model = k["chat_model"] as? String ?? ""
         let base = k["base_url"] as? String
         switch k["provider"] as? String {
-        case "anthropic": return (ProviderConfig(kind: .anthropic, model: model, thinking: thinking), secret)
+        case "anthropic": return (ProviderConfig(kind: .anthropic, baseURL: base, model: model, thinking: thinking), secret)   // 中转站的 Claude（11-03）
         case "gemini": return (ProviderConfig(kind: .gemini, model: model, thinking: thinking), secret)
         case "deepseek": return (ProviderConfig(kind: .openai, baseURL: base ?? "https://api.deepseek.com", model: model, thinking: thinking), secret)
         case "openai": return (ProviderConfig(kind: .openai, baseURL: base, model: model, thinking: thinking), secret)

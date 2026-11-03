@@ -290,13 +290,22 @@ struct AddKeyView: View {
                     if provider == "openai-compatible" {
                         TextField("接口地址（https://…/v1）", text: $baseURL)
                             .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                    } else if provider == "anthropic" {
+                        // 中转站的 Claude 原生接口（11-03 一测：中转用 OpenAI 格式调 Claude 没有缓存，每句全价）
+                        TextField("中转站地址（选填，直连 Claude 不用填）", text: $baseURL)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
                     }
                 } footer: {
-                    #if LITE
-                    Text("key 只存在这台手机的钥匙串里，不经过任何服务器；这里只显示后 4 位。")
-                    #else
-                    Text("key 加密存在服务器上，谁都看不到原文；这里只显示后 4 位。")
-                    #endif
+                    VStack(alignment: .leading, spacing: 6) {
+                        #if LITE
+                        Text("key 只存在这台手机的钥匙串里，不经过任何服务器；这里只显示后 4 位。")
+                        #else
+                        Text("key 加密存在服务器上，谁都看不到原文；这里只显示后 4 位。")
+                        #endif
+                        if provider == "openai-compatible" || provider == "anthropic" {
+                            Text("在中转站用 Claude 的模型：选「Claude」、填中转站地址（中转站要支持 Claude 原生接口）。这样才走缓存，每句便宜很多；选「兼容 OpenAI」用 Claude 是每句全价。")
+                        }
+                    }
                 }
 
                 if provider != "elevenlabs" {      // ElevenLabs 只管声音，不选模型（10-15）
@@ -392,8 +401,11 @@ struct AddKeyView: View {
         var req: URLRequest
         switch provider {
         case "anthropic":
-            req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/models?limit=1000")!, timeoutInterval: 15)
+            let relay = Self.claudeBase(baseURL)
+            req = URLRequest(url: URL(string: (relay ?? "https://api.anthropic.com") + "/v1/models?limit=1000")
+                             ?? URL(string: "https://api.anthropic.com/v1/models?limit=1000")!, timeoutInterval: 15)
             req.setValue(key, forHTTPHeaderField: "x-api-key")
+            if relay != nil { req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization") }
             req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         case "gemini":
             req = URLRequest(url: URL(string: "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000")!, timeoutInterval: 15)
@@ -435,6 +447,15 @@ struct AddKeyView: View {
         }
     }
 
+    /// Claude 中转地址收成到域名为止（Lite 的 AnthropicClient 和 Host 的 anthropic 包都会自己接 /v1/messages）；空着 = 直连
+    static func claudeBase(_ raw: String) -> String? {
+        var b = raw.trimmingCharacters(in: .whitespaces)
+        while b.hasSuffix("/") { b.removeLast() }
+        if b.hasSuffix("/messages") { b.removeLast("/messages".count) }
+        if b.hasSuffix("/v1") { b.removeLast(3) }
+        return b.isEmpty ? nil : b
+    }
+
     private func saveVoiceKey() async {
         trying = true; defer { trying = false }
         do {
@@ -454,6 +475,7 @@ struct AddKeyView: View {
             var body: [String: Any] = ["provider": provider, "api_key": apiKey.trimmingCharacters(in: .whitespacesAndNewlines),
                                        "chat_model": m]
             if provider == "openai-compatible" { body["base_url"] = baseURL.trimmingCharacters(in: .whitespaces) }
+            if provider == "anthropic", let relay = Self.claudeBase(baseURL) { body["base_url"] = relay }   // 中转站的 Claude（11-03）
             do {
                 let k: KeyDTO = try await model.api.call("POST", "keys", json: body)
                 if first == nil { first = k.id }
