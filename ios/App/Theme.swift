@@ -28,6 +28,39 @@ final class AppTheme: ObservableObject {
     @Published var cardStyle: String {
         didSet { UserDefaults.standard.set(cardStyle, forKey: "cardStyle") }
     }
+    /// 主屏软件名字的颜色（11-07 一测：换深色壁纸就看不见）：auto = 看壁纸深浅挑黑字或白字；dark / light = 自己定
+    @Published var homeLabelColor: String {
+        didSet { UserDefaults.standard.set(homeLabelColor, forKey: "homeLabelColor") }
+    }
+    var homeLabelIsLight: Bool {
+        switch homeLabelColor {
+        case "dark": false
+        case "light": true
+        default: wallpaperLuma(bgChoice) < 0.45
+        }
+    }
+    private var lumaCache: [String: CGFloat] = [:]
+    /// 壁纸平均亮度（0 黑 ～ 1 白）；纯色和渐变都是浅的。一张图只算一次
+    private func wallpaperLuma(_ choice: String) -> CGFloat {
+        if let hit = lumaCache[choice] { return hit }
+        guard choice != "plain", choice != "cloud",
+              let image = choice.hasPrefix("bg-") ? UIImage(named: choice)
+                                                  : UIImage(contentsOfFile: Self.bgDir.appendingPathComponent(choice).path),
+              let cg = image.cgImage else { return 1 }
+        var px = [UInt8](repeating: 0, count: 4)
+        let drawn: Bool = px.withUnsafeMutableBytes { raw in
+            guard let ctx = CGContext(data: raw.baseAddress, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            ctx.interpolationQuality = .medium
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+            return true
+        }
+        guard drawn else { return 1 }
+        let luma = (0.299 * CGFloat(px[0]) + 0.587 * CGFloat(px[1]) + 0.114 * CGFloat(px[2])) / 255
+        lumaCache[choice] = luma
+        return luma
+    }
     @Published var customBackgrounds: [String] {
         didSet { UserDefaults.standard.set(customBackgrounds, forKey: "customBackgrounds") }
     }
@@ -44,6 +77,7 @@ final class AppTheme: ObservableObject {
         bgChoice = UserDefaults.standard.string(forKey: "bgChoice") ?? "plain"
         chatBgChoice = UserDefaults.standard.string(forKey: "chatBgChoice") ?? "plain"
         cardStyle = UserDefaults.standard.string(forKey: "cardStyle") ?? "solid"
+        homeLabelColor = UserDefaults.standard.string(forKey: "homeLabelColor") ?? "auto"
         customBackgrounds = UserDefaults.standard.stringArray(forKey: "customBackgrounds") ?? []
         chatCustomBackgrounds = UserDefaults.standard.stringArray(forKey: "chatCustomBackgrounds") ?? []
     }

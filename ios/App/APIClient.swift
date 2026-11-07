@@ -60,8 +60,12 @@ final class APIClient: @unchecked Sendable {
     // MARK: - 请求
 
     private func makeRequest(_ method: String, _ path: String, query: [URLQueryItem] = [], json: Any? = nil) throws -> URLRequest {
-        var comps = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
-        if !query.isEmpty { comps.queryItems = query }
+        // 路径里自带的「?…」拆出来当参数（11-05 内测：朋友圈封面路径带 ?v=，appendingPathComponent 把 ? 转成 %3F，
+        // 取图一直 404，只有刚上传塞进缓存的那张看得见，你和 TA 的封面轮流「掉」）
+        let parts = path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+        var comps = URLComponents(url: baseURL.appendingPathComponent(String(parts[0])), resolvingAgainstBaseURL: false)!
+        let inline = parts.count > 1 ? URLComponents(string: "?" + parts[1])?.queryItems ?? [] : []
+        if !query.isEmpty || !inline.isEmpty { comps.queryItems = inline + query }
         var req = URLRequest(url: comps.url!)
         req.httpMethod = method
         if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }

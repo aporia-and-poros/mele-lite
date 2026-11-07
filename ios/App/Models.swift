@@ -185,6 +185,9 @@ struct MessageDTO: Decodable, Identifiable {
     var speakerName: String?
     /// 双语气泡（10-15）：跟 bubbles 并排的译文（你的泡 = 翻成 TA 那种语言的版本）；没开 / 没翻是 nil
     var translations: [String?]?
+    /// 重新回留下了几版、现在是第几版（11-07）
+    var variants: Int?
+    var variant: Int?
     /// 电话（10-31，Lite）：电话里说的那几条不出气泡；挂断那条画成一行「📞 通话时长」，点开看这通的逐句
     var call: Bool?
     var callEnd: Bool?
@@ -193,6 +196,7 @@ struct MessageDTO: Decodable, Identifiable {
     var ring: String?
     enum CodingKeys: String, CodingKey {
         case id, role, text, thinking, at, bubbles, cards, reaction, reactions, attachments, voices, divider, speaker, translations, call, ring
+        case variants, variant
         case callEnd = "call_end"
         case callID = "call_id"
         case thinkingMs = "thinking_ms"

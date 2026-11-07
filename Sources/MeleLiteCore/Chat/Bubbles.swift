@@ -82,12 +82,21 @@ public enum Bubbles {
     static let tagOnly = try! NSRegularExpression(pattern: #"^\s*<(\w+)[^>]*>[^<]*</\1>\s*$"#)
 
     public static func split(_ text: String, cap: Int? = 6, offline: Bool = false) -> [String] {
-        let paras = text.split(separator: try! Regex(#"\n\s*\n"#), omittingEmptySubsequences: false)
-            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
+        // 代码块里的空行不算分段（11-07，照服务器 bubbles.py）
+        var paras: [String] = []
+        for piece in text.split(separator: try! Regex(#"\n\s*\n"#), omittingEmptySubsequences: false).map(String.init) {
+            if let last = paras.last, last.components(separatedBy: "```").count % 2 == 0 {
+                paras[paras.count - 1] = last + "\n\n" + piece
+            } else if !piece.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                paras.append(piece)
+            }
+        }
+        paras = paras.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         var chunks: [String] = []
         for p in paras {
-            chunks.append(contentsOf: offline || p.count <= longPara ? [p] : splitLong(p))
+            // 代码、列表切开就乱了
+            let keep = offline || p.count <= longPara || p.contains("```") || p.range(of: #"(?m)^\s*(?:[-*•]|\d+[.、]) "#, options: .regularExpression) != nil
+            chunks.append(contentsOf: keep ? [p] : splitLong(p))
         }
         var merged: [String] = []
         for c in chunks {

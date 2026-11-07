@@ -881,6 +881,8 @@ CREATE TABLE IF NOT EXISTS group_members (
   PRIMARY KEY (conversation_id, companion_id)
 );
 CREATE INDEX IF NOT EXISTS group_members_companion_idx ON group_members (companion_id);
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS variants JSONB;      -- 重新回留下的几版（11-07）：含现在这版
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS variant INT;         -- 现在显示第几版
 ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS speaker_id UUID;
 ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS speaker_name TEXT NOT NULL DEFAULT '';
 -- 世界书分组 + 偶尔想起（10-14 内测：一百多条的梗清单 txt）：source = 从哪个文件导进来的（同一个文件一组）；

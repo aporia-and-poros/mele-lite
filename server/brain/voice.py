@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
 
-from llm.tts import NOTE_MODEL, TTSError, tts_cost
+from llm.tts import NOTE_MODEL, TTSError, takes_tags, tts_cost
 
 from . import auth
 
@@ -94,6 +94,13 @@ def strip_tags(text: str) -> str:
     return "\n".join(l.strip() for l in out.splitlines()).strip()
 
 
+def script(text: str, model: str) -> str:
+    """真正送去念的稿子。认标签的模型：一个标签都没有就垫一个；不认的（v2、flash）：把标签去掉，不然会照字念出来。"""
+    if not takes_tags(model):
+        return strip_tags(text)
+    return text if _TAG.search(text) else DEFAULT_TAG + text
+
+
 def as_text(bubble: str) -> str:
     """念不成的时候：这一条照常当文字发（去 🎤、去标签）。"""
     return strip_tags(body(bubble))
@@ -132,6 +139,15 @@ def text_sha(text: str) -> str:
 
 def default_voice() -> str:
     return PRESETS[0]["voice_id"] if PRESETS else ""
+
+
+async def model_for(deps, account: UUID, settings) -> str:
+    """语音条用哪个模型（11-07）：自带 key 的听 TA 选的；花我们额度的固定默认那个（别的模型价钱我们没算过）。"""
+    if not settings.voice_model:
+        return NOTE_MODEL
+    box = getattr(deps.keys, "box", None)
+    own = await auth.voice_key(deps.pool, box, account) if box is not None else None
+    return settings.voice_model if own else NOTE_MODEL
 
 
 async def quota(pool, account: UUID) -> int:
@@ -173,12 +189,13 @@ async def speak(deps, account: UUID, *, text: str, voice_id: str, purpose: str, 
     voice_id = voice_id or default_voice()
     if not voice_id:
         raise VoiceError("no_voice")
-    if not text:
-        raise VoiceError("bad_request")
     pool = deps.pool
     plain = text                                       # 历史里按 TA 看到的那句找（垫标签之前）
-    if not _TAG.search(text):
-        text = DEFAULT_TAG + text
+    if not plain:
+        raise VoiceError("bad_request")
+    text = script(text, model)
+    if not text:                                       # 不认标签的模型：稿子全是标签
+        raise VoiceError("bad_request")
     fp = fingerprint(text, voice_id, model)
     hit = await find(pool, account, fp)
     if hit is not None:

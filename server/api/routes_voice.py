@@ -12,15 +12,22 @@ from brain import voice as V
 from brain import voice_in
 from brain.bubbles import split_reply
 from brain.settings import Settings
-from llm.tts import TTSError, tts_cost
+from llm.tts import TTSError, models_public, tts_cost
 
 from .deps import Api, account, api, own_companion, own_conversation
 
 router = APIRouter()
+_VOICE_ID = re.compile(r"[A-Za-z0-9_-]{8,64}")     # 会拼进 ElevenLabs 的地址里，只放这些字符
 ERRORS = {"quota": "声音额度用完了", "no_key": "还没有可用的声音钥匙", "no_voice": "还没给它选嗓子",
           "auth": "ElevenLabs 的 key 不对或者没开权限", "server": "ElevenLabs 那边出错了，等会儿再试",
           "network": "连不上 ElevenLabs", "bad_request": "这句念不了", "too_long": "语音最长 2 分钟",
+          "voice_not_found": "ElevenLabs 找不到这把嗓子，检查一下音色 ID", "model_not_found": "这把 key 用不了这个模型，换一个试试",
           "missing_permissions": "这把 ElevenLabs key 少了权限：在 ElevenLabs 后台给它打开 Text to Speech、Speech to Text 和 Voices"}
+
+
+def _voice_label(name: str) -> str:
+    """音色库里的名字常常是「Adam - Distinct, Deep and Engaging」：只留破折号前面。"""
+    return re.split(r"\s[-–—]\s", re.sub(r"\s+", " ", name).strip())[0][:30]
 
 
 def _err(kind: str, status: int = 400) -> HTTPException:
@@ -54,7 +61,7 @@ async def speak(mid: int, body: dict = Body(...), acc: UUID = Depends(account), 
     text = V.body(bubbles[i]) if note else bubbles[i]
     try:
         c = await V.speak(a.deps, acc, text=text, voice_id=s.voice_id, purpose="note" if note else "speak", message_id=mid,
-                          prev=near(i - 1), nxt=near(i + 1))
+                          prev=near(i - 1), nxt=near(i + 1), model=await V.model_for(a.deps, acc, s))
     except V.VoiceError as e:
         raise _err(e.kind) from e
     return c.public()
@@ -71,6 +78,30 @@ async def preset_preview(key: str, lang: str = "zh", acc: UUID = Depends(account
         raise HTTPException(404, "没有这把")
     return FileResponse(V.PRESET_DIR / f"{key}-{'en' if lang == 'en' else 'zh'}.mp3", media_type="audio/mpeg",
                         headers={"Cache-Control": "public, max-age=2592000"})
+
+
+@router.get("/voice/library")
+async def library(acc: UUID = Depends(account), a: Api = Depends(api)):
+    """音色库（11-07）：TA 自己那把 key 账号里的嗓子。只给自带 key 的人，别把我们账号里的嗓子列出去。"""
+    try:
+        tts, own = await V.engine(a.deps, acc)
+        if not own:
+            raise HTTPException(403, ERRORS["no_key"])
+        return await tts.voices()
+    except V.VoiceError as e:
+        raise _err(e.kind, 403) from e
+    except TTSError as e:
+        raise _err(e.kind, 400 if e.kind in ("auth", "missing_permissions") else 502) from e
+
+
+@router.get("/voice/models")
+async def models(acc: UUID = Depends(account), a: Api = Depends(api)):
+    """能选的模型（11-07）。key 没开「看模型」权限、或者连不上，就给出厂那张表。"""
+    try:
+        tts, own = await V.engine(a.deps, acc)
+        return models_public(await tts.models() if own else None)
+    except (V.VoiceError, TTSError):
+        return models_public()
 
 
 async def _can_design(a: Api, acc: UUID) -> bool:
@@ -106,7 +137,7 @@ async def choose(cid: UUID, body: dict = Body(...), acc: UUID = Depends(account)
     """{voice_id, name} 选现成的；或 {generated_voice_id, name, description} 存一把设计出来的（先看声音位够不够）。"""
     await own_companion(a, acc, cid)
     pool = a.deps.pool
-    name = re.sub(r"\s+", " ", str(body.get("name") or "")).strip()[:30]
+    name = _voice_label(str(body.get("name") or ""))
     voice_id = str(body.get("voice_id") or "").strip()
     if body.get("generated_voice_id"):
         if not await _can_design(a, acc):
@@ -122,6 +153,16 @@ async def choose(cid: UUID, body: dict = Body(...), acc: UUID = Depends(account)
             raise _err(e.kind) from e
         except TTSError as e:
             raise _err(e.kind, 502) from e
+    elif voice_id:
+        if not _VOICE_ID.fullmatch(voice_id):
+            raise HTTPException(400, "这不像音色 ID：只有英文字母和数字，一般 20 位")
+        if not name:                                     # 手填的：查个名字，查不到不拦（公共音色查不到也念得出来）
+            try:
+                tts, _ = await V.engine(a.deps, acc)
+                name = _voice_label(await tts.voice_name(voice_id))
+            except (V.VoiceError, TTSError):
+                pass
+            name = name or voice_id[:8] + "…"
     if not voice_id:
         raise HTTPException(400, "要给 voice_id 或 generated_voice_id")
     s = Settings.from_dict(await archive.get_settings(pool, cid))

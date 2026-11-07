@@ -31,6 +31,7 @@ struct MemoryBoard: View {
 
     @AppStorage("pegLayout") private var saved: String = ""
     @State private var dragging: String?
+    @State private var tearing: String?
     @State private var dragOffset: CGSize = .zero
     @State private var lastMoved: String?
 
@@ -86,6 +87,7 @@ struct MemoryBoard: View {
                             .position(x: W * ps.x + live.width, y: H * ps.y + live.height)
                             .zIndex(dragging == key ? 30 : (lastMoved == key ? 20 : 10 + Double(index) * 0.01))
                             .transition(.scale(scale: 0.4).combined(with: .opacity))
+                            .onTapGesture { if !editing { tearing = ps.id } }      // 点一下问要不要撕（11-07 一测：找不到怎么删）
                             .gesture(enterArrange)
                             .simultaneousGesture(editing ? move(key, from: CGPoint(x: ps.x, y: ps.y), in: geo.size) { pt in
                                 stickers.move(ps.id, to: pt)
@@ -109,6 +111,14 @@ struct MemoryBoard: View {
                 } : nil)
             }
             .frame(width: W, height: H)
+            .confirmationDialog("把这枚贴纸撕下来？", isPresented: Binding(get: { tearing != nil }, set: { if !$0 { tearing = nil } }),
+                                titleVisibility: .visible) {
+                Button("撕下来", role: .destructive) {
+                    if let id = tearing { withAnimation { stickers.unplace(id) } }
+                    tearing = nil
+                }
+                Button("算了", role: .cancel) { tearing = nil }
+            }
             .overlay(alignment: .topTrailing) {
                 if editing { editBar.padding(.trailing, 14).padding(.top, 10).transition(.opacity) }
             }

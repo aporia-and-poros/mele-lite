@@ -64,3 +64,10 @@ def test_empty():
 def test_typing_delay_grows_and_caps():
     assert typing_delay("") == 0.4
     assert typing_delay("字" * 1000) == 2.5
+
+
+def test_code_block_and_list_stay_whole():
+    code = "看这个：\n\n```python\nprint(1)\n\nprint(2)\n```\n\n好了"
+    assert split_reply(code, 6) == ["看这个：", "```python\nprint(1)\n\nprint(2)\n```", "好了"]
+    items = "\n".join(f"- 第{i}条，这一条写得比较长比较长比较长比较长比较长比较长比较长比较长比较长。" for i in range(12))
+    assert split_reply(items, 6) == [items]

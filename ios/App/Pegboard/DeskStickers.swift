@@ -309,6 +309,9 @@ struct StickerShelf: View {
                                 if item.file != nil, !editing {
                                     Button { addToChatStickers(item) } label: { Label("加进表情包", systemImage: "face.smiling") }
                                 }
+                                if !editing {     // 11-07 一测：只知道能加、找不到怎么删
+                                    Button(role: .destructive) { confirmDelete = item } label: { Label("从架子上拿掉", systemImage: "trash") }
+                                }
                             }
                     }
                     PhotosPicker(selection: $pick, matching: .images) {

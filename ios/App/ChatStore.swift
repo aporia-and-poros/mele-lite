@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UIKit
 
 /// 聊天流里的一行（一个气泡 / 一段思考 / 一张动作卡片）。
 ///
@@ -44,6 +45,9 @@ struct ChatItem: Identifiable, Hashable {
     var voice: VoiceRef?
     /// 思考那一行：这一轮想了多久（毫秒，10-05）
     var thinkingMs: Int?
+    /// 重新回留下的几版（11-07）：挂在这一轮最后一泡下面，「‹ 2/3 ›」
+    var variantIndex: Int? = nil
+    var variantCount: Int? = nil
     /// 双语气泡（10-15）：你的泡 = 翻成 TA 那种语言的版本（画在上面）；TA 的泡 = 译文（画在下面）
     var translation: String? = nil
 
@@ -123,7 +127,10 @@ struct ChatItem: Identifiable, Hashable {
             let drawn = i == 0 ? (m.attachments ?? []).filter { $0.kind == "image" } : []
             out.append(ChatItem(id: rowID(message: m.id, slot: bubbleSlot + i), messageID: m.id, mine: false, kind: .text,
                                 text: text, at: m.at, reaction: reaction(of: m, bubble: i, count: bubbles.count),
-                                bubble: i, attachments: drawn, voice: v ?? nil, translation: merged ? nil : tr(i)))
+                                bubble: i, attachments: drawn, voice: v ?? nil,
+                                variantIndex: i == bubbles.count - 1 && (m.variants ?? 0) > 1 ? m.variant ?? 0 : nil,
+                                variantCount: i == bubbles.count - 1 && (m.variants ?? 0) > 1 ? m.variants : nil,
+                                translation: merged ? nil : tr(i)))
         }
         // 查手机申请卡排在它说的话后面（先说，再递申请）
         for (j, card) in peeks.enumerated() {
@@ -424,9 +431,101 @@ final class ChatStore: ObservableObject {
 
     // MARK: - 发
 
+    private var rewoundParts = false
+
+    // MARK: 选好还没发的图（11-07 许愿）：一选就后台传，发的时候不用等；能配一句话一起发
+
+    struct Staged: Identifiable {
+        let id = UUID()
+        let thumb: UIImage
+        let name: String
+        var uploading = true
+    }
+    @Published private(set) var staged: [Staged] = []
+    /// 攒着还没发的几句（11-03 一测）：放这里，输入框被多选、上传进度换掉再回来还在
+    @Published var held: [String] = []
+    private var stagedJobs: [UUID: Task<AttachmentDTO?, Never>] = [:]
+    /// 一张传完再传下一张（Lite 存附件表是读了再写，一起传会互相盖掉）
+    private var stagedTail: Task<AttachmentDTO?, Never>?
+    /// 带图那条还在等上传：这期间发的字排在它后面，不抢先
+    private var sendingStaged = false
+    private var afterStaged: [String] = []
+    private static let maxStaged = 10         // 跟两边接口一条消息最多收的附件数一样
+
+    func stage(_ files: [(Data, String, String)]) {
+        for (data, name, mime) in files {
+            guard staged.count < Self.maxStaged else {
+                errorText = String(localized: "一条最多带 \(Self.maxStaged) 张，多的没放上来")
+                break
+            }
+            guard let thumb = UIImage(data: data)?.resizedIfNeeded(maxSide: 200) else { continue }
+            let item = Staged(thumb: thumb, name: name)
+            staged.append(item)
+            let before = stagedTail
+            let job = Task<AttachmentDTO?, Never> { [weak self] in
+                _ = await before?.value
+                guard let self, !Task.isCancelled else { return nil }
+                defer { if let i = self.staged.firstIndex(where: { $0.id == item.id }) { self.staged[i].uploading = false } }
+                do {
+                    let att = try await self.api.upload("\(self.path)/attachments", fileName: name, mime: mime, data: data)
+                    if att.kind == "image" { AuthImageView.seed(urlPath: "attachments/\(att.id.uuidString.lowercased())", data: data) }
+                    return att
+                } catch {
+                    if !Task.isCancelled { self.errorText = "\(name) 没传上去：\(error.localizedDescription)" }   // 自己拿掉的不算错
+                    return nil
+                }
+            }
+            stagedJobs[item.id] = job
+            stagedTail = job
+        }
+    }
+
+    func unstage(_ id: UUID) {
+        staged.removeAll { $0.id == id }
+        stagedJobs.removeValue(forKey: id)?.cancel()
+    }
+
+    /// 发出去：图和这句是一条。图还没传完就等着，这期间发的字排在它后面
+    func sendStaged(_ text: String) {
+        let list = staged
+        let jobs = list.compactMap { stagedJobs.removeValue(forKey: $0.id) }
+        staged = []
+        sendingStaged = true
+        uploading = true
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        Task { [weak self] in
+            var done: [AttachmentDTO] = []
+            for job in jobs {
+                if let att = await job.value { done.append(att) }
+            }
+            guard let self else { return }
+            self.uploading = false
+            self.sendingStaged = false
+            if done.isEmpty {
+                if !trimmed.isEmpty { self.send(trimmed) }      // 图都没传上去：话照发，别吞了
+            } else {
+                let echo = Echo(id: self.nextLocalID(), clientID: UUID().uuidString, text: trimmed, sentAt: Date(), tries: 0, attachments: done)
+                self.echoes.append(echo)
+                self.typing = true
+                self.rebuild()
+                await self.post(echo)
+                self.armWatchdog()
+            }
+            let later = self.afterStaged
+            self.afterStaged = []
+            later.forEach(self.send)
+        }
+    }
+
     func send(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        if sendingStaged { afterStaged.append(trimmed); return }
+        if rewoundParts {
+            rewoundParts = false
+            let lines = trimmed.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            if lines.count > 1, !trimmed.hasPrefix("「回复：") { lines.forEach(send); return }   // 带引用的：引用和那句是一条
+        }
         let echo = Echo(id: nextLocalID(), clientID: UUID().uuidString, text: trimmed, sentAt: Date(), tries: 0)
         echoes.append(echo)
         typing = true                    // 她一发出去对面就「正在输入」（之前自用的 App那样），不等服务器那十秒
@@ -598,6 +697,8 @@ final class ChatStore: ObservableObject {
         struct Out: Decodable { let kind: String; let text: String? }
         do {
             let out: Out = try await api.call("POST", "\(path)/rewind", json: ["message_id": messageID])
+            // 连发的几句撤回编辑（11-07 一测：重写以后气泡合成一个）：原文按行回到输入栏，发的时候再按行分开
+            rewoundParts = out.kind == "edit" && (messages.first { $0.id == messageID }?.bubbles?.count ?? 0) > 1
             messages.removeAll { $0.id >= messageID }
             live = []
             liveDone = false
@@ -608,6 +709,46 @@ final class ChatStore: ObservableObject {
             errorText = error.localizedDescription
             return nil
         }
+    }
+
+    /// 改 TA 说过的一泡（11-07）。成了返回 true
+    func editBubble(messageID: Int, bubble: Int, text: String) async -> Bool {
+        do {
+            _ = try await api.raw("PATCH", "messages/\(messageID)", json: ["bubble": bubble, "text": text])
+            await reload(messageID)
+            return true
+        } catch {
+            errorText = Self.hostNote(error)
+            return false
+        }
+    }
+
+    /// 换到重新回留下的另一版（11-07）
+    func chooseVariant(messageID: Int, index: Int) async {
+        do {
+            _ = try await api.raw("POST", "messages/\(messageID)/variant", json: ["index": index])
+            await reload(messageID)
+        } catch {
+            errorText = Self.hostNote(error)
+        }
+    }
+
+    /// 连着还没更新的 Host：这两个接口没有，别只报 Not Found
+    private static func hostNote(_ error: Error) -> String {
+        if let e = error as? APIError, e.status == 404 || e.status == 405 {
+            return String(localized: "这台 Host 还没更新：先在服务器上跑一次 mele-host update")
+        }
+        return (error as? APIError)?.message ?? error.localizedDescription
+    }
+
+    /// 重拉这一条，气泡换成新的
+    private func reload(_ messageID: Int) async {
+        guard let page: MessagesPage = try? await api.call("GET", "\(path)/messages", query: [URLQueryItem(name: "before", value: String(messageID + 1)),
+                                                                                                         URLQueryItem(name: "limit", value: "1")]),
+              let fresh = page.messages.first(where: { $0.id == messageID }),
+              let i = messages.firstIndex(where: { $0.id == messageID }) else { return }
+        messages[i] = fresh
+        rebuild()
     }
 
     /// 这一行是不是刚发出去、还没存下来的那句（只有文字的才能撤：带图的一起排着，拿不开）

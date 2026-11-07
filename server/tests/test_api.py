@@ -401,3 +401,63 @@ async def test_deleting_a_window_stops_its_turn(pool):
         gate.set()
         await asyncio.sleep(0.05)
     assert await pool.fetchval("SELECT count(*) FROM chat_messages WHERE text = '不该出现'") == 0
+
+
+async def test_regenerate_keeps_reply_bubbles(pool):
+    """重新回之后 TA 的几条气泡还是几条（11-07 一测说「合在一起了」：回复本身不会合，合的是自己连发那几句，见 ChatStore.rewind）"""
+    e = Env(pool, ["第一句\n\n第二句", "第一句\n\n第二句"])
+    t = await e.login()
+    async with e.client(t) as c:
+        comp, conv = await e.first_window(c)
+        await c.patch(f"/companions/{comp['id']}", json={"settings": {"reply_wait": 0}})
+        cid = conv["id"]
+        await c.post(f"/conversations/{cid}/messages", json={"text": "嗨"})
+        await e.rooms.idle(UUID(cid))
+        msgs = (await c.get(f"/conversations/{cid}/messages")).json()["messages"]
+        reply = [m for m in msgs if m["role"] == "assistant"][-1]
+        assert reply["bubbles"] == ["第一句", "第二句"]
+        await c.post(f"/conversations/{cid}/rewind", json={"message_id": reply["id"]})
+        await e.rooms.idle(UUID(cid))
+        msgs = (await c.get(f"/conversations/{cid}/messages")).json()["messages"]
+        assert [m for m in msgs if m["role"] == "assistant"][-1]["bubbles"] == ["第一句", "第二句"]
+
+
+async def test_edit_reply_and_variants(pool):
+    """改 TA 的话 + 重新回留版本（11-07）"""
+    e = Env(pool, ["第一版\n\n后半句", "第二版"])
+    t = await e.login()
+    async with e.client(t) as c:
+        comp, conv = await e.first_window(c)
+        await c.patch(f"/companions/{comp['id']}", json={"settings": {"reply_wait": 0}})
+        cid = conv["id"]
+        await c.post(f"/conversations/{cid}/messages", json={"text": "嗨"})
+        await e.rooms.idle(UUID(cid))
+
+        async def last():
+            ms = (await c.get(f"/conversations/{cid}/messages")).json()["messages"]
+            return [m for m in ms if m["role"] == "assistant"][-1], [m for m in ms if m["role"] == "user"][-1]
+        reply, mine = await last()
+        assert reply["variants"] is None
+        assert (await c.patch(f"/messages/{reply['id']}", json={"bubble": 1, "text": "改过的"})).status_code == 200
+        assert (await last())[0]["bubbles"] == ["第一版", "改过的"]
+        assert (await c.patch(f"/messages/{reply['id']}", json={"bubble": 9, "text": "x"})).status_code == 400
+        assert (await c.patch(f"/messages/{reply['id']}", json={"bubble": 0, "text": " "})).status_code == 400
+        assert (await c.patch(f"/messages/{mine['id']}", json={"bubble": 0, "text": "x"})).status_code == 400
+
+        await c.post(f"/conversations/{cid}/rewind", json={"message_id": reply["id"]})
+        await e.rooms.idle(UUID(cid))
+        reply, _ = await last()
+        assert reply["bubbles"] == ["第二版"] and reply["variants"] == 2 and reply["variant"] == 1
+        assert (await c.post(f"/messages/{reply['id']}/variant", json={"index": 0})).status_code == 200
+        reply, _ = await last()
+        assert reply["bubbles"] == ["第一版", "改过的"] and reply["variant"] == 0
+        assert (await c.post(f"/messages/{reply['id']}/variant", json={"index": 5})).status_code == 400
+        # 翻回去之后再改，切回来那一版还在；改的是当前这一版
+        await c.patch(f"/messages/{reply['id']}", json={"bubble": 0, "text": "又改"})
+        await c.post(f"/messages/{reply['id']}/variant", json={"index": 1})
+        assert (await last())[0]["bubbles"] == ["第二版"]
+        await c.post(f"/messages/{reply['id']}/variant", json={"index": 0})
+        assert (await last())[0]["bubbles"] == ["又改", "改过的"]
+    t2 = await e.login("mia@example.com")
+    async with e.client(t2) as c2:
+        assert (await c2.patch(f"/messages/{reply['id']}", json={"bubble": 0, "text": "x"})).status_code == 400

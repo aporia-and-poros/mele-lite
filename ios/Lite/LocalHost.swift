@@ -68,6 +68,8 @@ final class LocalHost: @unchecked Sendable {
         case ("POST", 3) where p[0] == "conversations" && p[2] == "recall": return brain.recall(p[1], r.json)
         case ("GET", 2) where p[0] == "attachments": return attachment(p[1])
         // ── 消息上的小动作 ──
+        case ("PATCH", 2) where p[0] == "messages": return editReply(Int(p[1]), r.json)
+        case ("POST", 3) where p[0] == "messages" && p[2] == "variant": return chooseVariant(Int(p[1]), r.json["index"] as? Int)
         case ("PUT", 3) where p[0] == "messages" && p[2] == "reaction": return react(Int(p[1]), r.json["emoji"] as? String, bubble: r.json["bubble"] as? Int)
         case ("DELETE", 3) where p[0] == "messages" && p[2] == "reaction": return react(Int(p[1]), nil, bubble: r.query["bubble"].flatMap(Int.init))
         default:
@@ -226,7 +228,7 @@ final class LocalHost: @unchecked Sendable {
         "heartbeat_on": true, "morning_on": true, "sleep_from": "00:00", "sleep_to": "08:00", "patrol_overrides": [String: Any](),
         "relationship": "", "cache_keepalive": false, "diary_on": true, "offline_life": false, "talk_rules": "", "diary_chars": 600, "voice_mode": "sometimes",
         "full_handbook": true,      // Lite 说明书开关（10-08 Aporia：默认开）
-        "voice_id": "", "voice_name": "",
+        "voice_id": "", "voice_name": "", "voice_model": "",
         "memory_server": LocalMemory.serverID,   // 新联系人默认接本地记忆库（10-11 第 20 版）
     ]
 
@@ -485,6 +487,7 @@ final class LocalHost: @unchecked Sendable {
                 "attachments": atts, "divider": m["divider"] ?? NSNull(),
                 "translations": (m["translations"] as? [Any]).flatMap { $0.count == shown.count ? $0 : nil } ?? NSNull(),
                 "speaker": m["speaker"] ?? NSNull(), "speaker_name": m["speaker_name"] ?? NSNull(),
+                "variants": (m["variants"] as? [Any])?.count ?? NSNull(), "variant": m["variant"] ?? NSNull(),
                 "call": m["call"] as? Bool ?? false, "call_end": m["call_end"] as? Bool ?? false, "call_id": m["call_id"] ?? NSNull(), "ring": m["ring"] ?? NSNull()]
     }
 
@@ -549,6 +552,49 @@ final class LocalHost: @unchecked Sendable {
         var out: [Any] = (0..<count).map { rs[String($0)] ?? NSNull() }
         if count > 0, out[count - 1] is NSNull, let old = m["reaction"] as? String, !old.isEmpty { out[count - 1] = old }
         return out
+    }
+
+    /// TA 说的、还没卷进账本的一条（11-07，照 Host routes_chat._editable_reply）
+    private func editableReply(_ mid: Int?) -> (conv: String, at: Int, list: [[String: Any]])? {
+        guard let mid, let (conv, i) = store.locate(message: mid) else { return nil }
+        let list = store.messages(conv)
+        guard (list[i]["role"] as? String) == "assistant", mid > LocalEcho.rolledUpto(store, conv) else { return nil }
+        return (conv, i, list)
+    }
+
+    /// 改 TA 说过的一泡（11-07，修小幻觉）
+    private func editReply(_ mid: Int?, _ b: [String: Any]) -> LocalResponse {
+        guard var e = editableReply(mid) else { return .error(400, String(localized: "这句改不了：只能改 TA 说的、还没卷进账本的话")) }
+        guard !brain.busy(e.conv) else { return .error(409, String(localized: "它还在回，等这一轮说完再改")) }
+        let settings = settings(forMessage: e.list[e.at], in: e.conv)
+        var parts = Bubbles.split(e.list[e.at]["text"] as? String ?? "", cap: settings["max_bubbles"] as? Int ?? 6,
+                                  offline: settings["long_mode"] as? Bool ?? false)
+        let text = (b["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let i = b["bubble"] as? Int, parts.indices.contains(i) else { return .error(400, String(localized: "没有这一条")) }
+        guard !text.isEmpty else { return .error(400, String(localized: "改完不能是空的")) }
+        guard !LocalVoice.isVoice(parts[i]) else { return .error(400, String(localized: "语音条改不了")) }
+        parts[i] = text
+        let full = parts.joined(separator: "\n\n")
+        e.list[e.at]["text"] = full
+        e.list[e.at]["translations"] = nil
+        if var vs = e.list[e.at]["variants"] as? [String], let v = e.list[e.at]["variant"] as? Int, vs.indices.contains(v) {
+            vs[v] = full
+            e.list[e.at]["variants"] = vs
+        }
+        store.saveMessages(e.conv, e.list)
+        return .json(["ok": true])
+    }
+
+    /// 换到重新回留下的另一版（11-07）
+    private func chooseVariant(_ mid: Int?, _ index: Int?) -> LocalResponse {
+        guard var e = editableReply(mid) else { return .error(400, String(localized: "这句改不了：只能改 TA 说的、还没卷进账本的话")) }
+        guard !brain.busy(e.conv) else { return .error(409, String(localized: "它还在回，等这一轮说完再改")) }
+        guard let index, let vs = e.list[e.at]["variants"] as? [String], vs.indices.contains(index) else { return .error(400, String(localized: "没有这一版")) }
+        e.list[e.at]["text"] = vs[index]
+        e.list[e.at]["variant"] = index
+        e.list[e.at]["translations"] = nil
+        store.saveMessages(e.conv, e.list)
+        return .json(["ok": true])
     }
 
     private func react(_ mid: Int?, _ emoji: String?, bubble: Int?) -> LocalResponse {

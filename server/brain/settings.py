@@ -4,6 +4,7 @@
 外层 = 名字、性格、联想强弱、记性长度；里层「高级」= 细读、注入、哨兵、最多几条。"""
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass, field, fields
 from datetime import time
 from zoneinfo import ZoneInfo
@@ -97,6 +98,7 @@ class Settings:
     voice_mode: str = "sometimes"       # 语音条（10-03）：off 不发 / sometimes 偶尔 / often 常常
     voice_id: str = ""                  # 它的嗓子（ElevenLabs voice_id）；空 = 用出厂那把（brain/voice.PRESETS 第一把）
     voice_name: str = ""                # 嗓子的名字（设置页显示）
+    voice_model: str = ""               # 语音条 / 念给我听 / 电话「有表情」用哪个 ElevenLabs 模型（11-07）；空 = 默认（llm/tts.NOTE_MODEL）
     mcp_servers: list[str] = field(default_factory=list)   # 这个 TA 能用的 MCP 服务（10-05，Host；brain/mcp.py）
     talk_rules: str = ""                # 说话规矩（10-05）：用户写了就换掉说明书里出厂的两条（一两句就够 / 直接说）；空 = 出厂
     offline_life: bool = False          # 线下生活（10-05）：关着 = 说明书里没有「你有自己的一天」；Lite 本机还管地图 / 它的一天
@@ -161,6 +163,8 @@ class Settings:
             raise ValueError("reply_wait must be 0..60 seconds")
         if self.call_voice not in ("fast", "expressive", "system"):
             raise ValueError("call_voice must be fast, expressive or system")
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{0,64}", self.voice_model):
+            raise ValueError("voice_model looks wrong")
         if self.voice_mode not in ("off", "sometimes", "often"):
             raise ValueError("voice_mode must be off, sometimes or often")
         if self.tool_reminder_every < 1:

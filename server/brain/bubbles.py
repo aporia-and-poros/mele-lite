@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 
 LONG_PARA = 250
+_LIST_LINE = re.compile(r"(?m)^\s*(?:[-*•]|\d+[.、]) ")
 PIECE = 120
 _ENDS = "。！？!?…～~"
 _CLOSERS = "」』”’）)】"
@@ -90,10 +91,17 @@ VOICE = "🎤"
 
 
 def split_reply(text: str, cap: int | None = 6, long_mode: bool = False) -> list[str]:
-    paras = [p.strip() for p in re.split(r"\n\s*\n", text or "") if p.strip()]
+    paras: list[str] = []
+    for p in re.split(r"(\n\s*\n)", text or ""):
+        if paras and paras[-1].count("```") % 2 == 1:   # 代码块里的空行不算分段（11-07）
+            paras[-1] += p
+        elif p.strip():
+            paras.append(p)
+    paras = [p.strip() for p in paras]
     chunks: list[str] = []
     for p in paras:
-        chunks.extend([p] if long_mode or len(p) <= LONG_PARA or p.startswith(VOICE) else split_long(p))
+        keep = long_mode or len(p) <= LONG_PARA or p.startswith(VOICE) or "```" in p or _LIST_LINE.search(p)
+        chunks.extend([p] if keep else split_long(p))   # 代码、列表切开就乱了（11-07）
     merged: list[str] = []
     for c in chunks:
         if merged and _TAG_ONLY.match(c) and not merged[-1].startswith(VOICE):

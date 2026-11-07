@@ -18,13 +18,17 @@ enum WidgetKind: String, Codable, CaseIterable, Identifiable {
     case health     // 健康（10-04）：默认步数，点卡选显示哪一项
     case chat       // 最近聊天（10-04 主屏改版：原来首页顶上那张聊天卡）
     case pegboard   // 洞洞板（10-04 主屏改版：原来 Memory 那一页）
+    case todo       // 待办（11-07 Aporia）：毛玻璃底，圆圈点一下勾掉
+    case tarot      // 今日一牌（11-07）：点开写问题、翻一张
+    case foodToday  // 今日饮食（11-07）：今天的总数和运动进度
+    case quote      // 翻到一句（11-07）：从收藏里翻一句，底图自己换，点一下回到那天
     case starmap    // 星图（10-04 Aporia）：毛玻璃底，中间是记忆库那颗自己转的星球；没接记忆库就灰着
 
     var id: String { rawValue }
     /// 编辑时角上有「换照片」的
-    var takesPhoto: Bool { self == .photo || self == .polaroid }
+    var takesPhoto: Bool { self == .photo || self == .polaroid || self == .quote }
     /// 自己就是一张卡、外面不再套卡底的
-    var bare: Bool { self == .chat || self == .pegboard || self == .polaroid || self == .starmap }
+    var bare: Bool { self == .chat || self == .pegboard || self == .polaroid || self == .starmap || self == .todo || self == .quote }
     /// Lite 本机没有服务器：自唤醒（它自己醒来）不给加；专注 10-05 夜起 Lite 两边都有
     static var available: [WidgetKind] {
         Lite.local ? allCases.filter { $0 != .wakes }
@@ -44,6 +48,10 @@ enum WidgetKind: String, Codable, CaseIterable, Identifiable {
         case .chat: return String(localized: "最近聊天")
         case .pegboard: return String(localized: "洞洞板")
         case .starmap: return String(localized: "星图")
+        case .todo: return String(localized: "待办")
+        case .tarot: return String(localized: "今日一牌")
+        case .foodToday: return String(localized: "今日饮食")
+        case .quote: return String(localized: "翻到一句")
         }
     }
     /// 只有一种大小的（主屏改版）：最近聊天 = 中，洞洞板 = 大
@@ -72,6 +80,10 @@ enum WidgetKind: String, Codable, CaseIterable, Identifiable {
         case .chat: return String(localized: "最近跟谁聊、聊到哪了")
         case .pegboard: return String(localized: "信、相册、档案袋、地图，还能挂贴纸")
         case .starmap: return String(localized: "记忆库里的星球，点进去看记忆")
+        case .todo: return String(localized: "还没做的事，圆圈点一下就勾掉")
+        case .tarot: return String(localized: "问一句，每天翻一张")
+        case .foodToday: return String(localized: "今天吃了多少、运动到哪了")
+        case .quote: return String(localized: "从收藏里翻一句，点一下回到那天")
         }
     }
     var icon: String {
@@ -86,6 +98,10 @@ enum WidgetKind: String, Codable, CaseIterable, Identifiable {
         case .health: return "heart.circle"
         case .chat: return "bubble.left.and.bubble.right"
         case .pegboard: return "square.grid.3x3"
+        case .todo: return "checklist"
+        case .tarot: return "sparkles"
+        case .foodToday: return "fork.knife"
+        case .quote: return "quote.opening"
         case .starmap: return "sparkle"
         }
     }
@@ -332,6 +348,10 @@ struct WidgetCard: View {
             case .chat: ChatWidget()
             case .pegboard: PegboardWidget()
             case .starmap: StarmapWidget()
+            case .todo: TodoCard(size: slot.size)
+            case .tarot: DailyTarotCard(size: slot.size)
+            case .foodToday: FoodTodayCard(size: slot.size, exerciseGoal: Int(slot.metric ?? "") ?? FoodTodayCard.defaultGoal)
+            case .quote: QuoteCard(size: slot.size, photo: slot.photo)
             }
         }
     }

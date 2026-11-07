@@ -427,7 +427,8 @@ def squash(msgs: list[Msg]) -> list[Msg]:
 async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, resend: bool = False,
                    wake: str | None = None, attachments: list | None = None,
                    pieces: list[str] | None = None, free_trial: bool = False, quiet_food: bool = False,
-                   group: GroupCtx | None = None, call: CallCtx | None = None, aside: str | None = None) -> TurnOutcome:
+                   group: GroupCtx | None = None, call: CallCtx | None = None, aside: str | None = None,
+                   variants: list[str] | None = None) -> TurnOutcome:
     """scope = 这一轮在谁的名下（brain/scope.py）：设置、人设、记忆归联系人，聊天、账本、状态归窗口，用量归账号。
     resend = 重新生成：用户那句已经在存档最后了（刚撤掉了它的回复），不再存一遍，直接再回一次。
     wake = 它自己醒来（巡逻）：这段〔醒来〕代替用户的话。它想事时的动静先压着，回 <silent> 就全丢、什么都不存；
@@ -820,6 +821,8 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
                                           speaker=comp if group is not None else None,
                                           speaker_name=(persona.name or "TA") if group is not None else "",
                                           translations=trans or None)
+        if variants and out.text.strip():            # 重新回（11-07）：之前那几版留着，能翻回去
+            await archive.set_variants(pool, saved.id, [*variants, out.text], len(variants))
         if ctx.drawn:                                # 它画的图挂在这句上（10-15）
             await _safe(files.claim(pool, conv, ctx.drawn, saved.id), [])
         if group is not None:

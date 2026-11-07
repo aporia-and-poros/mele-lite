@@ -435,7 +435,7 @@ struct Springboard: View {
     private func cell(_ item: HomeItem, index: Int, size: CGSize, icon: CGFloat) -> some View {
         let view = Group {
             if let app = item.app {
-                AppIcon(app: app, size: icon, showLabel: true, onRemove: editing ? { confirmRemove = item } : nil) { open(app) }
+                AppIcon(app: app, size: icon, showLabel: true, onWallpaper: true, onRemove: editing ? { confirmRemove = item } : nil) { open(app) }
                     .coachMark("me", when: app == .me)
             } else if let slot = item.widget {
                 widget(item, slot)
@@ -462,17 +462,25 @@ struct Springboard: View {
             .overlay(alignment: .topLeading) {
                 if editing {
                     Button { confirmRemove = item } label: {
-                        Image(systemName: "minus").font(Typo.icon(12, .bold)).foregroundStyle(theme.ink)
-                            .frame(width: 26, height: 26).background(Circle().fill(.regularMaterial))
+                        Image(systemName: "minus").font(Typo.icon(13, .bold)).foregroundStyle(theme.ink)
+                            .frame(width: 30, height: 30).background(Circle().fill(.regularMaterial))
+                            .frame(width: 54, height: 54).contentShape(Rectangle())   // 11-07：看着 30，点得到 54
                     }
                     .buttonStyle(.plain)
-                    .offset(x: -8, y: -8)
+                    .offset(x: -22, y: -22)
                 }
             }
             .overlay(alignment: .bottomLeading) {
                 if editing && slot.kind.takesPhoto {
                     ChangePhotoButton(aspect: slot.kind == .polaroid ? PolaroidCard.windowAspect : { $0.width / $0.height }) { name in
                         update(item.id) { $0.widget?.photo = name }
+                    }
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                if editing && slot.kind == .foodToday {   // 运动目标（11-07）：存在 metric 里
+                    ExerciseGoalButton(goal: Int(slot.metric ?? "") ?? FoodTodayCard.defaultGoal) { n in
+                        update(item.id) { $0.widget?.metric = String(n) }
                     }
                 }
             }
@@ -809,6 +817,8 @@ struct AppIcon: View {
     let app: HomeApp
     var size: CGFloat = 60
     var showLabel = true
+    /// 名字压在壁纸上（主屏）：颜色跟着壁纸深浅；软件库那种有底色的页面不用
+    var onWallpaper = false
     /// 编辑时左上角的「－」
     var onRemove: (() -> Void)? = nil
     let action: () -> Void
@@ -840,11 +850,12 @@ struct AppIcon: View {
                 .overlay(alignment: .topLeading) {
                     if let onRemove {
                         Button(action: onRemove) {
-                            Image(systemName: "minus").font(Typo.icon(11, .bold)).foregroundStyle(theme.ink)
-                                .frame(width: 22, height: 22).background(Circle().fill(.regularMaterial))
+                            Image(systemName: "minus").font(Typo.icon(12, .bold)).foregroundStyle(theme.ink)
+                                .frame(width: 26, height: 26).background(Circle().fill(.regularMaterial))
+                                .frame(width: 46, height: 46).contentShape(Rectangle())   // 11-07：看着 26，点得到 46
                         }
                         .buttonStyle(.plain)
-                        .offset(x: -7, y: -7)
+                        .offset(x: -17, y: -17)
                     }
                 }
                 .overlay(alignment: .topTrailing) {
@@ -856,7 +867,8 @@ struct AppIcon: View {
                 if showLabel {
                     Text(app.title)
                         .font(Typo.sans(11, .medium))
-                        .foregroundStyle(theme.ink)
+                        .foregroundStyle(onWallpaper && theme.homeLabelIsLight ? Color.white : theme.ink)
+                        .shadow(color: onWallpaper && theme.homeLabelIsLight ? .black.opacity(0.45) : .clear, radius: 2, y: 1)
                         .lineLimit(1)
                 }
             }

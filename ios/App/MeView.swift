@@ -59,6 +59,16 @@ struct AppearanceCard: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
+                label("主屏软件名字")
+                Picker("主屏软件名字", selection: $theme.homeLabelColor) {
+                    Text("跟着壁纸").tag("auto")
+                    Text("黑字").tag("dark")
+                    Text("白字").tag("light")
+                }
+                .pickerStyle(.segmented)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
                 label("背景")
                 // 照之前自用的 App：一排横着滑，不全摊开（10-03 Aporia）
                 ScrollView(.horizontal, showsIndicators: false) {

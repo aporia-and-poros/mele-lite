@@ -21,6 +21,8 @@ final class LocalBrain: @unchecked Sendable {
         var running: Task<Void, Never>?
         /// 群里你插话了（10-11）：正在说的那个说完就停，后面排着的作废，从你这句重新来
         var interrupt = false
+        /// 重新回（11-07）：撤掉的那几版，下一条回复存的时候接上
+        var keptVariants: [String] = []
     }
     private var rooms: [String: Room] = [:]
     private var graceIDs: [String: UIBackgroundTaskIdentifier] = [:]
@@ -206,12 +208,22 @@ final class LocalBrain: @unchecked Sendable {
             host.store.saveMessages(conv, list)
             return .json(["kind": "edit", "text": text])
         }
+        // 重新回之前留一份（11-07，一测最想要的）：撤掉的话合成一版，排在原来那几版后面，最多留 9 版
+        var kept: [String] = []
+        if LocalGroups.group(host.store, conv) == nil {
+            let gone = list[i...].filter { ($0["role"] as? String) == "assistant" }.compactMap { $0["text"] as? String }
+                .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            var old = list[i]["variants"] as? [String] ?? []
+            if let v = list[i]["variant"] as? Int, old.indices.contains(v) { old.remove(at: v) }
+            if !gone.isEmpty { kept = Array((old + [gone.joined(separator: "\n\n")]).suffix(9)) }
+        }
         list.removeSubrange(i...)
         host.store.saveMessages(conv, list)
         let r = room(conv)
+        lock.withLock { r.keptVariants = kept }
         let task = Task { [weak self] in
             await self?.runRoom(conv, images: [])
-            self?.lock.withLock { r.running = nil }
+            self?.lock.withLock { r.running = nil; r.keptVariants = [] }   // 这一轮没说出话：旧版不留给下一条回复
         }
         lock.withLock { r.running = task }
         return .json(["kind": "regenerate"])
@@ -1097,9 +1109,19 @@ final class LocalBrain: @unchecked Sendable {
             say(["type": "inner_voice", "text": innerVoiceText])
         }
         if !finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !cards.isEmpty || !drawn.isEmpty {
-            _ = host.store.addMessage(conv, role: "assistant", text: finalText, thinking: thinking, thinkingMs: thinkingMs, cards: cards,
+            let savedID = host.store.addMessage(conv, role: "assistant", text: finalText, thinking: thinking, thinkingMs: thinkingMs, cards: cards,
                                              attachments: drawn, innerVoice: innerVoiceText, speaker: group == nil ? nil : cidSelf,
-                                             translations: trans)
+                                             translations: trans)["id"] as? Int
+            let r = room(conv)
+            let kept = lock.withLock { () -> [String] in defer { r.keptVariants = [] }; return r.keptVariants }
+            if !kept.isEmpty, !finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                var list = host.store.messages(conv)
+                if let at = list.lastIndex(where: { ($0["id"] as? Int) == savedID }) {
+                    list[at]["variants"] = kept + [finalText]
+                    list[at]["variant"] = kept.count
+                    host.store.saveMessages(conv, list)
+                }
+            }
             if group == nil { LocalBooks.catchReply(host.store, conversation: conv, companion: cid, text: finalText) }
         }
         if group == nil, !rang, finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, cards.isEmpty {

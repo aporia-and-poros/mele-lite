@@ -53,6 +53,7 @@ enum FeedbackGate {
 
 struct FeedbackCard: View {
     @EnvironmentObject private var theme: AppTheme
+    let api: APIClient
     let onClose: () -> Void
 
     @State private var problems = ""
@@ -65,6 +66,7 @@ struct FeedbackCard: View {
     @State private var name = ""
     @State private var sending = false
     @State private var failed = false
+    @State private var copied = false
     @State private var thanked = false
     @State private var shown = false
 
@@ -202,8 +204,19 @@ struct FeedbackCard: View {
     private var footer: some View {
         VStack(spacing: 10) {
             if failed {
-                Text("没交上去，网不太好？再点一次试试")
-                    .font(Typo.sans(Typo.Size.caption)).foregroundStyle(.red.opacity(0.75))
+                // 11-05 内测：国内打不开 workers.dev，Lite 本机怎么点都交不上。退一步：复制下来发到群里也算交了
+                VStack(spacing: 6) {
+                    Text("没交上去（国内有时连不上）。可以复制下来，发到内测群里")
+                        .font(Typo.sans(Typo.Size.caption)).foregroundStyle(theme.inkDim).multilineTextAlignment(.center)
+                    Button {
+                        UIPasteboard.general.string = summary
+                        withAnimation(.snappy) { copied = true }
+                    } label: {
+                        Label(copied ? "复制好了" : "复制我的回答", systemImage: copied ? "checkmark" : "doc.on.doc")
+                            .font(Typo.sans(Typo.Size.caption, .semibold)).foregroundStyle(theme.accentDeep)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
             Button { Task { await send() } } label: {
                 Group {
@@ -262,8 +275,11 @@ struct FeedbackCard: View {
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        req.timeoutInterval = 20
-        guard let (_, resp) = try? await URLSession.shared.data(for: req), (resp as? HTTPURLResponse)?.statusCode == 200 else {
+        req.timeoutInterval = 15
+        var sent = (try? await URLSession.shared.data(for: req)).map { ($0.1 as? HTTPURLResponse)?.statusCode == 200 } ?? false
+        // 国内打不开 workers.dev（11-05）：连着 Host 的交给 Host 代交（Host 的 /me/feedback 原样转给中转）
+        if !sent, Lite.hosted { sent = (try? await api.raw("POST", "me/feedback", json: body)) != nil }
+        guard sent else {
             failed = true
             return
         }
@@ -271,6 +287,18 @@ struct FeedbackCard: View {
         withAnimation(.snappy) { thanked = true }
         try? await Task.sleep(for: .seconds(1.4))
         close()
+    }
+
+    /// 交不上时复制的那段：跟 read_feedback 打出来的一个样
+    private var summary: String {
+        func line(_ no: Int, _ q: String, _ a: String, _ note: String) -> String {
+            "\(no). \(q)\n" + (a.isEmpty ? "—" : a) + (note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : "：\(note.trimmingCharacters(in: .whitespacesAndNewlines))")
+        }
+        return ["【Mele 反馈】" + (name.trimmingCharacters(in: .whitespaces).isEmpty ? "" : "（\(name.trimmingCharacters(in: .whitespaces))）"),
+                line(1, "有没有出过什么问题", label(Self.problemChoices, problems), problemsNote),
+                line(2, "记性如何", label(Self.memoryChoices, memory), memoryNote),
+                line(3, "二测只修一个 / 只加一个", label(Self.oneThingChoices, oneThing), oneThingNote),
+                line(4, "愿意推荐吗", label(Self.recommendChoices, recommend), "")].joined(separator: "\n\n")
     }
 
     /// 存中文字面（Aporia读的时候一眼看懂），不存内部编号

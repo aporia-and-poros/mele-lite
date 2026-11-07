@@ -15,14 +15,14 @@ enum CallVoice {
     static func kind(_ settings: [String: Any]) -> Kind { Kind(rawValue: settings["call_voice"] as? String ?? "") ?? .fast }
 
     /// 一句 → 一串声音块（24k Float32 单声道）。ElevenLabs 那边的错照语音条那套归类（auth / quota / network …）
-    static func eleven(_ text: String, key: String, voiceID: String, kind: Kind, prev: String?) -> AsyncThrowingStream<AVAudioPCMBuffer, Error> {
+    static func eleven(_ text: String, key: String, voiceID: String, kind: Kind, expressiveModel: String, prev: String?) -> AsyncThrowingStream<AVAudioPCMBuffer, Error> {
         AsyncThrowingStream { cont in
             let job = Task {
-                let model = kind == .expressive ? LocalVoice.noteModel : fastModel
-                // 有表情那档（v3 起的模型）：一个标签都没有时垫一个，跟语音条一样
-                let said = kind == .expressive ? LocalVoice.defaultTag + text : text
+                let model = kind == .expressive ? expressiveModel : fastModel
+                // 有表情那档：跟语音条同一个模型、同一套稿子（认标签的垫一个，不认的去掉）
+                let said = kind == .expressive ? LocalVoice.script(text, model: model) : text
                 var body: [String: Any] = ["text": said, "model_id": model, "voice_settings": ["stability": 0.5]]
-                if let prev, !prev.isEmpty { body["previous_text"] = prev }
+                if let prev, !prev.isEmpty, LocalVoice.takesContext(model) { body["previous_text"] = prev }
                 do {
                     do {
                         try await streamPCM("/v1/text-to-speech/\(voiceID)/stream", key: key, body: body, cont: cont)
@@ -70,9 +70,7 @@ enum CallVoice {
             var err = Data()
             for try await b in bytes { err.append(b); if err.count > 4000 { break } }
             NSLog("[call] ElevenLabs \(status): \(String(decoding: err, as: UTF8.self).prefix(300))")
-            if String(decoding: err, as: UTF8.self).contains("missing_permissions") { throw LocalVoice.Fail(kind: "missing_permissions") }
-            throw LocalVoice.Fail(kind: [401, 403].contains(status) ? "auth" : [402, 429].contains(status) ? "quota"
-                                  : status < 500 ? "bad_request" : "server")
+            throw LocalVoice.Fail(kind: LocalVoice.failKind(status: status, body: err))
         }
         var pending = Data(), want = 4_800
         do {

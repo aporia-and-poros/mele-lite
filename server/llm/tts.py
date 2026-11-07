@@ -6,12 +6,36 @@ v4 只认 stability 0 / 0.5 / 1（用 0.5），不认 speed；previous_text / ne
 FakeTTS 给测试和演示服务器用，不联网。"""
 from __future__ import annotations
 
+import re
+
 import httpx
 
 PRICE_PER_K = {"eleven_v4": 0.08, "eleven_v4_turbo": 0.04}
 NOTE_MODEL = "eleven_v4"
 STT_MODEL = "scribe_v2"
 DESIGN_MODEL = "eleven_ttv_v3"
+# 语音条能选的模型（11-07，内测）。key 没开「看模型」权限时就给这张表，开了就用 ElevenLabs 给的、这张表排前面
+MODELS = [("eleven_v4", "Eleven v4"), ("eleven_v4_turbo", "Eleven v4 Turbo"), ("eleven_v3", "Eleven v3"),
+          ("eleven_v3_conversational", "Eleven v3 Conversational"), ("eleven_multilingual_v2", "Multilingual v2"),
+          ("eleven_flash_v2_5", "Flash v2.5"), ("eleven_turbo_v2_5", "Turbo v2.5")]
+
+
+def takes_tags(model: str) -> bool:
+    """这个模型认不认 [soft, tired] 这种音频标签（v3 起才认；别的模型会把标签照字念出来）。"""
+    return re.match(r"eleven_v\d", model) is not None
+
+
+def takes_context(model: str) -> bool:
+    """v3 不收 previous_text / next_text（11-07 实测 400 unsupported_model），带了整句念不了。"""
+    return not model.startswith("eleven_v3")
+
+
+def models_public(rows: list[tuple[str, str]] | None = None) -> list[dict]:
+    """给设置页的模型表：出厂那几个排前面，ElevenLabs 那边多出来的跟在后面。"""
+    got = dict(rows or [])
+    order = [m for m, _ in MODELS] + [m for m in got if m not in dict(MODELS)]
+    names = {**dict(MODELS), **got}
+    return [{"id": m, "name": names[m], "tags": takes_tags(m)} for m in order]
 
 
 def tts_cost(chars: int, model: str) -> float:
@@ -36,6 +60,14 @@ def _kind(status: int) -> str:
     return "server"
 
 
+def _fail(status: int, body: str) -> "TTSError":
+    """这几种 ElevenLabs 说得清楚，单独归一类，提示才说得准（missing_permissions：10-04 实测，只开了部分权限的 key）。"""
+    for kind in ("missing_permissions", "voice_not_found", "model_not_found"):
+        if kind in body:
+            return TTSError(kind, body[:300])
+    return TTSError(_kind(status), body[:300])
+
+
 class ElevenLabs:
     def __init__(self, api_key: str, base: str = "https://api.elevenlabs.io", client: httpx.AsyncClient | None = None):
         self.key, self.base = api_key, base.rstrip("/")
@@ -51,17 +83,15 @@ class ElevenLabs:
             if self._client is None:
                 await client.aclose()
         if r.status_code >= 400:
-            if "missing_permissions" in r.text:          # key 对，只是这一项没开权限（10-04 实测：只开了部分权限的 key）
-                raise TTSError("missing_permissions", r.text[:300])
-            raise TTSError(_kind(r.status_code), r.text[:300])
+            raise _fail(r.status_code, r.text)
         return r
 
     async def synth(self, text: str, voice_id: str, model: str = NOTE_MODEL,
                     previous_text: str | None = None, next_text: str | None = None) -> bytes:
         body: dict = {"text": text, "model_id": model, "voice_settings": {"stability": 0.5}}
-        if previous_text:
+        if previous_text and takes_context(model):
             body["previous_text"] = previous_text
-        if next_text:
+        if next_text and takes_context(model):
             body["next_text"] = next_text
         r = await self._req("POST", f"/v1/text-to-speech/{voice_id}", params={"output_format": "mp3_44100_128"}, json=body)
         return r.content
@@ -70,7 +100,7 @@ class ElevenLabs:
         """电话（10-31）：流式合成，边合成边吐 24k 16 位单声道 PCM。第一块到了就往手机推，不等整句。
         这个模型不收流式（400）就退回整句合成，切块照样吐。"""
         body: dict = {"text": text, "model_id": model, "voice_settings": {"stability": 0.5}}
-        if previous_text:
+        if previous_text and takes_context(model):
             body["previous_text"] = previous_text
         client = self._client or httpx.AsyncClient(timeout=httpx.Timeout(20, read=30))
         try:
@@ -82,9 +112,7 @@ class ElevenLabs:
                             err = (await r.aread()).decode(errors="ignore")
                             if r.status_code == 400 and path.endswith("/stream"):
                                 continue
-                            if "missing_permissions" in err:
-                                raise TTSError("missing_permissions", err[:300])
-                            raise TTSError(_kind(r.status_code), err[:300])
+                            raise _fail(r.status_code, err)
                         async for chunk in r.aiter_bytes():
                             yield chunk
                         return
@@ -100,6 +128,23 @@ class ElevenLabs:
         return [{"voice_id": v["voice_id"], "name": v.get("name", ""), "labels": v.get("labels") or {},
                  "preview_url": v.get("preview_url") or ""}
                 for v in r.json().get("voices", []) if v.get("category") == "premade"]
+
+    async def voices(self) -> list[dict]:
+        """这把 key 账号里所有的嗓子（自己克隆的、设计的、收藏的、官方的）：音色库（11-07）。"""
+        r = await self._req("GET", "/v1/voices")
+        return [{"voice_id": v["voice_id"], "name": v.get("name", ""), "category": v.get("category") or "",
+                 "about": v.get("description") or "", "preview": v.get("preview_url") or ""}
+                for v in r.json().get("voices", [])]
+
+    async def voice_name(self, voice_id: str) -> str:
+        """填音色 ID 时查个名字。没加进账号的公共音色这里查不到，但念得出来（11-07 实测），所以查不到不算错。"""
+        r = await self._req("GET", f"/v1/voices/{voice_id}")
+        return r.json().get("name", "")
+
+    async def models(self) -> list[tuple[str, str]]:
+        """（模型 id，名字）。只要能合成的。"""
+        r = await self._req("GET", "/v1/models")
+        return [(m["model_id"], m.get("name") or m["model_id"]) for m in r.json() if m.get("can_do_text_to_speech")]
 
     async def design(self, description: str, text: str | None = None) -> list[dict]:
         body: dict = {"voice_description": description, "model_id": DESIGN_MODEL}
@@ -167,6 +212,22 @@ class FakeTTS:
     async def premade(self) -> list[dict]:
         self.calls.append(("premade",))
         return [{"voice_id": "v_demo", "name": "Demo", "labels": {}, "preview_url": ""}]
+
+    async def voices(self) -> list[dict]:
+        self.calls.append(("voices",))
+        self._maybe_fail()
+        return [{"voice_id": "v_mine_clone", "name": "My clone", "category": "cloned", "about": "", "preview": ""},
+                {"voice_id": "v_demo_preset", "name": "Demo", "category": "premade", "about": "calm", "preview": "https://x/p.mp3"}]
+
+    async def voice_name(self, voice_id) -> str:
+        self.calls.append(("voice_name", voice_id))
+        self._maybe_fail()
+        return "Found Voice"
+
+    async def models(self) -> list[tuple[str, str]]:
+        self.calls.append(("models",))
+        self._maybe_fail()
+        return [("eleven_v4", "Eleven v4 (from API)"), ("eleven_new_x", "New X")]
 
     async def design(self, description, text=None) -> list[dict]:
         self.calls.append(("design", description))

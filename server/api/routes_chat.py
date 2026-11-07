@@ -25,9 +25,9 @@ router = APIRouter()
 KEEPALIVE = 15.0                 # 事件流没事件时隔多久发一行心跳，免得被中间的代理掐断
 
 
-def _runner(a: Api, scope: Scope):
+def _runner(a: Api, scope: Scope, variants: list[str] | None = None):
     async def run(text: str, resend: bool, emit, attachments: list, parts: list) -> None:
-        out = await run_turn(a.deps, scope, text, emit, resend=resend, attachments=attachments, pieces=parts)
+        out = await run_turn(a.deps, scope, text, emit, resend=resend, attachments=attachments, pieces=parts, variants=variants)
         await accounts.touch_conversation(a.deps.pool, scope.conversation, a.deps.now())
         if out.said and not scope.incognito:
             reply = next((m for m in reversed(await archive.recent(a.deps.pool, scope.conversation, 3))
@@ -123,7 +123,8 @@ def _msg(m: archive.StoredMsg) -> dict:
             # 电话（10-31）：电话里说的不出气泡；挂断那条画成一行「📞 通话时长」，点开看这通
             "call": bool(m.call) and not (m.call or {}).get("end") and not (m.call or {}).get("ring"),
             "call_end": bool((m.call or {}).get("end")), "call_id": (m.call or {}).get("id"),
-            "ring": (m.call or {}).get("ring")}           # TA 打来没接通（第 4 步）：missed / declined / withdrawn
+            "ring": (m.call or {}).get("ring"),           # TA 打来没接通（第 4 步）：missed / declined / withdrawn
+            "variants": len(m.variants or []) or None, "variant": m.variant}   # 重新回留下了几版、现在是第几版（11-07）
 
 
 @router.get("/conversations/{conv}/messages")
@@ -237,11 +238,72 @@ async def do_rewind(conv: UUID, body: dict = Body(...), acc: UUID = Depends(acco
             await rewind.undo_group_round(a.deps.pool, a.deps.embedder, scope, mid)
             a.rooms.run_now(conv, _group_runner(a, acc, conv), resend=True)
             return {"kind": "regenerate"}
+        kept = _kept_variants(await archive.unrolled(a.deps.pool, conv), mid)
         await rewind.undo_reply(a.deps.pool, a.deps.embedder, scope, mid)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
-    a.rooms.run_now(conv, _runner(a, scope), resend=True)
+    a.rooms.run_now(conv, _runner(a, scope, kept), resend=True)
     return {"kind": "regenerate"}
+
+
+MAX_VARIANTS = 10
+
+
+def _kept_variants(msgs: list, mid: int) -> list[str]:
+    """重新回之前留一份（11-07，一测最想要的）：这几条撤掉的话合成一版，排在它原来那几版后面；只留最近几版。"""
+    gone = [m for m in msgs if m.id >= mid and m.role == "assistant" and m.text.strip()]
+    if not gone:
+        return []
+    old = gone[0].variants or []
+    earlier = [v for i, v in enumerate(old) if i != gone[0].variant]
+    return [*earlier, "\n\n".join(m.text for m in gone)][-(MAX_VARIANTS - 1):]
+
+
+async def _editable_reply(a: Api, acc: UUID, mid: int):
+    """TA 说的、还没卷进账本的一条：（消息，这个 TA 的设定）"""
+    row = await a.deps.pool.fetchrow(
+        """SELECT m.user_id AS conv, coalesce(m.speaker_id, c.companion_id) AS companion_id FROM chat_messages m
+           JOIN conversations c ON c.id = m.user_id WHERE m.id = $1 AND c.account_id = $2 AND m.role = 'assistant'""", mid, acc)
+    if row is None:
+        raise HTTPException(400, "只能改它说的话")
+    if a.rooms.busy(row["conv"]):
+        raise HTTPException(409, "它还在回，等这一轮说完再改")
+    msg = next((m for m in await archive.unrolled(a.deps.pool, row["conv"]) if m.id == mid), None)
+    if msg is None:
+        raise HTTPException(400, "这句已经卷进账本了，改不了")
+    return msg, Settings.from_dict(await archive.get_settings(a.deps.pool, row["companion_id"]))
+
+
+@router.patch("/messages/{mid}")
+async def edit_reply(mid: int, body: dict = Body(...), acc: UUID = Depends(account), a: Api = Depends(api)):
+    """改 TA 说过的一泡（11-07，修小幻觉）：{bubble, text}。TA 下一轮看到的就是改过的。"""
+    msg, s = await _editable_reply(a, acc, mid)
+    bubbles = split_reply(msg.text, s.max_bubbles, s.long_mode)
+    i, text = body.get("bubble"), str(body.get("text") or "").strip()
+    if not isinstance(i, int) or not 0 <= i < len(bubbles):
+        raise HTTPException(400, "没有这一条")
+    if not text:
+        raise HTTPException(400, "改完不能是空的")
+    if voice.is_voice(bubbles[i]):
+        raise HTTPException(400, "语音条改不了")
+    bubbles[i] = text
+    full = "\n\n".join(bubbles)
+    vs = msg.variants
+    if vs and msg.variant is not None and 0 <= msg.variant < len(vs):
+        vs = [*vs[:msg.variant], full, *vs[msg.variant + 1:]]
+    await archive.set_reply_text(a.deps.pool, mid, full, variants=vs)
+    return {"ok": True}
+
+
+@router.post("/messages/{mid}/variant")
+async def choose_variant(mid: int, body: dict = Body(...), acc: UUID = Depends(account), a: Api = Depends(api)):
+    """换到重新回留下的另一版（11-07）：{index}。TA 下一轮看到的就是这一版。"""
+    msg, _ = await _editable_reply(a, acc, mid)
+    i = body.get("index")
+    if not msg.variants or not isinstance(i, int) or not 0 <= i < len(msg.variants):
+        raise HTTPException(400, "没有这一版")
+    await archive.set_reply_text(a.deps.pool, mid, msg.variants[i], index=i)
+    return {"ok": True}
 
 
 RECALL_NOTE = {

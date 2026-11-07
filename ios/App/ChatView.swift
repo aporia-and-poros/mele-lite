@@ -108,6 +108,8 @@ struct ChatView: View {
     @State private var refocusAfterActions = false
     /// 倒回之前要问一声的那条（后面还有别的话，会一起撤）
     @State private var confirmRewind: ChatItem?
+    /// 正在改 TA 的哪一泡（11-07）
+    @State private var editingReply: ChatItem?
     /// 指挥 UIKit 那半边列表的把手；引用类型，跨重画活着
     @State private var listHandle = ChatListHandle()
     /// 胶囊头的下缘（全局坐标）：列表内容从它底下开始
@@ -133,6 +135,8 @@ struct ChatView: View {
     @State private var visitingMoments: MomentsVisit?    // 点 TA 的头像进 TA 的朋友圈（11-03 Aporia，照微信）
     #if LITE
     @State private var consentAsk: LiteConsent.Ask?
+    /// 同意弹窗还开着时，攒着一起发的后面几句先排在这儿
+    @State private var consentQueue: [String] = []
     @State private var calling = false          // 语音通话（10-31）
     @State private var showCallHistory = false  // 通话记录（10-31，第 5 步）
     #endif
@@ -367,7 +371,7 @@ struct ChatView: View {
                         }
                     }
                     photoItems = []
-                    await chat.sendAttachments(files)
+                    chat.stage(files)          // 11-07 许愿：先摆在输入框上面、后台传着，配句话一起发
                 }
             }
             .fileImporter(isPresented: $filePickerPresented, allowedContentTypes: Self.fileTypes,
@@ -420,9 +424,13 @@ struct ChatView: View {
                 LiteConsentSheet(ask: ask, onAgree: {
                     LiteConsent.book.grant(ask.provider)
                     consentAsk = nil
-                    chat.send(ask.text)
+                    deliver(ask.text)
+                    consentQueue.forEach(deliver)           // 攒着一起发的后面几句
+                    consentQueue = []
                 }, onCancel: {
-                    UserDefaults.standard.set(ask.text, forKey: draftKey)       // 没发的话放回输入框
+                    // 没发的话放回输入框（攒着的几句一行一句）
+                    UserDefaults.standard.set(([ask.text] + consentQueue).joined(separator: "\n"), forKey: draftKey)
+                    consentQueue = []
                     consentAsk = nil
                 })
                 .environmentObject(theme)
@@ -430,6 +438,14 @@ struct ChatView: View {
                 .interactiveDismissDisabled()
             }
             #endif
+            .sheet(item: $editingReply) { item in
+                EditReplySheet(original: item.text) { text in
+                    guard let mid = item.messageID, let b = item.bubble else { return }
+                    Task { _ = await chat.editBubble(messageID: mid, bubble: b, text: text) }
+                }
+                .environmentObject(theme)
+                .presentationDetents([.medium, .large])
+            }
             .confirmationDialog(confirmRewind?.mine == true ? "从这句往后的聊天都会撤回" : "这一轮和之后的聊天都会撤回",
                                 isPresented: Binding(get: { confirmRewind != nil }, set: { if !$0 { confirmRewind = nil } }),
                                 titleVisibility: .visible) {
@@ -1233,6 +1249,9 @@ struct ChatView: View {
                         .offset(y: -9)
                         .padding(.bottom, 2)
                 }
+                if let n = item.variantCount, let v = item.variantIndex, let mid = item.messageID {
+                    variantPager(message: mid, index: v, count: n)
+                }
                 if item.kind != .thinking, item.kind != .innerVoice, showTime {
                     Text(Self.messageTime(item.at))
                         .font(Typo.sans(skin.size(Typo.Size.caption)).monospacedDigit())
@@ -1606,19 +1625,21 @@ struct ChatView: View {
                 // 草稿住在 DraftField 自己家里：她打的每一个字都会重画拥有它的那个视图。
                 // 输入框换行了要吱一声：底栏的高度是 UIKit 那边按实际宽度量的，自己感知不到 SwiftUI 里的换行
                 DraftField(draftKey: draftKey, placeholder: "对\(companionName)说点什么…", skin: skin,
+                           hasStaged: !chat.staged.isEmpty, stagedBar: AnyView(stagedBar), held: $chat.held,
                            mentionNames: group == nil ? [] : (group?.members ?? []).compactMap { memberLook[$0]?.name },
                            onHeightChange: { _ in listHandle.barContentChanged() },
                            onVoice: isMoment ? nil : { data, secs in Task { await chat.sendVoice(data, seconds: secs) } }) { typed in
                     var text = typed
-                    if let quoted = quoting {
+                    if let quoted = quoting, !typed.isEmpty {
                         text = "「回复：\(quoteSnippet(quoted))」\n" + text
                         quoting = nil
                     }
                     #if LITE
                     // 第一次发给这家模型：先说清楚发到哪、请 TA 点同意（苹果 5.1.2）
-                    if let ask = LiteConsent.ask(companion: companionID, text: text) { consentAsk = ask; return }
+                    if consentAsk != nil { consentQueue.append(text); return }
+                    if !text.isEmpty, let ask = LiteConsent.ask(companion: companionID, text: text) { consentAsk = ask; return }
                     #endif
-                    chat.send(text)
+                    deliver(text)
                 }
             }
         }
@@ -1788,6 +1809,15 @@ struct ChatView: View {
         } label: {
             Label("多选", systemImage: "checkmark.circle")
         }
+        // 改 TA 的话（11-07 许愿：修一些小幻觉）：语音条不改
+        if !item.mine, item.kind == .text, item.voice == nil, item.messageID != nil, item.bubble != nil {
+            Button {
+                closeActions(refocus: false)
+                editingReply = item
+            } label: {
+                Label("改这句", systemImage: "square.and.pencil")
+            }
+        }
         if let mid = item.messageID {
             Button(role: item.mine ? nil : .destructive) {
                 closeActions(refocus: false)
@@ -1830,6 +1860,56 @@ struct ChatView: View {
         } catch {
             chat.errorText = (error as? APIError)?.message ?? "没念出来"
         }
+    }
+
+    /// 真正发出去：选好了图就是图配这句，否则就是这句
+    private func deliver(_ text: String) {
+        if chat.staged.isEmpty { chat.send(text) } else { chat.sendStaged(text) }
+    }
+
+    /// 选好还没发的图（11-07）：摆在输入框上面，能拿掉
+    @ViewBuilder
+    private var stagedBar: some View {
+        if !chat.staged.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(chat.staged) { s in
+                        Image(uiImage: s.thumb)
+                            .resizable().scaledToFill()
+                            .frame(width: 58, height: 58)
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .overlay { if s.uploading { ProgressView().controlSize(.small) } }
+                            .overlay(alignment: .topTrailing) {
+                                Button { chat.unstage(s.id) } label: {
+                                    Image(systemName: "xmark.circle.fill").font(.system(size: 18))
+                                        .foregroundStyle(Color(white: 0.3), Color.white)
+                                }
+                                .buttonStyle(.plain)
+                                .offset(x: 4, y: -4)
+                            }
+                            .padding(.top, 4).padding(.trailing, 4)
+                    }
+                }
+            }
+        }
+    }
+
+    /// 重新回留下的几版（11-07）：「‹ 2/3 ›」，翻到哪版 TA 接下来就看到哪版
+    private func variantPager(message mid: Int, index v: Int, count n: Int) -> some View {
+        HStack(spacing: 2) {
+            Button { Task { await chat.chooseVariant(messageID: mid, index: v - 1) } } label: {
+                Image(systemName: "chevron.left").frame(width: 28, height: 24).contentShape(Rectangle())
+            }
+            .disabled(v <= 0)
+            Text("\(v + 1)/\(n)").monospacedDigit()
+            Button { Task { await chat.chooseVariant(messageID: mid, index: v + 1) } } label: {
+                Image(systemName: "chevron.right").frame(width: 28, height: 24).contentShape(Rectangle())
+            }
+            .disabled(v >= n - 1)
+        }
+        .buttonStyle(.plain)
+        .font(Typo.sans(skin.size(Typo.Size.caption)))
+        .foregroundStyle(skin.inkDim)
     }
 
     private func doRewind(_ item: ChatItem) {
@@ -2293,14 +2373,22 @@ private struct DraftField: View {
     @AppStorage private var draft: String
     @FocusState private var focused: Bool
     @State private var voiceActive = false
+    /// 攒着一起发（11-03 一测）：长按发送键，这句先排在输入框上面；再按一下发送，一起发
+    @Binding private var held: [String]
+    /// 选好了图：没打字也能发
+    var hasStaged = false
+    var stagedBar: AnyView?
 
     /// 草稿一个窗口一份（09-28：以前全局一份，换个联系人草稿跟着串过去）
     /// 群里能 @ 的名字（10-11）：打了 @ 就在输入框上面浮一排
     var mentionNames: [String] = []
 
-    init(draftKey: String, placeholder: String, skin: ChatSkin, mentionNames: [String] = [], onHeightChange: @escaping (CGFloat) -> Void,
+    init(draftKey: String, placeholder: String, skin: ChatSkin, hasStaged: Bool = false, stagedBar: AnyView? = nil, held: Binding<[String]>, mentionNames: [String] = [], onHeightChange: @escaping (CGFloat) -> Void,
          onVoice: ((Data, Double) -> Void)? = nil, onSend: @escaping (String) -> Void) {
         self.mentionNames = mentionNames
+        self.hasStaged = hasStaged
+        self.stagedBar = stagedBar
+        _held = held
         self.onVoice = onVoice
         _draft = AppStorage(wrappedValue: "", draftKey)
         self.placeholder = placeholder
@@ -2309,8 +2397,23 @@ private struct DraftField: View {
         self.onSend = onSend
     }
 
-    private var sendable: Bool {
-        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    private var typed: Bool { !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var sendable: Bool { typed || hasStaged || !held.isEmpty }
+
+    /// 这句先攒着
+    private func hold() {
+        guard typed else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        held.append(draft.trimmingCharacters(in: .whitespacesAndNewlines))
+        draft = ""
+    }
+
+    /// 攒着的 + 正在打的，按顺序发
+    private func flush() {
+        let all = held + (typed ? [draft] : [])
+        held = []
+        draft = ""
+        if all.isEmpty { onSend("") } else { all.forEach(onSend) }
     }
 
     private var showMentions: Bool { !mentionNames.isEmpty && draft.hasSuffix("@") }
@@ -2319,6 +2422,23 @@ private struct DraftField: View {
         // 录语音时输入框让开，录音条放进来（10-03）
         if !voiceActive {
         VStack(alignment: .leading, spacing: 6) {
+        stagedBar
+        if !held.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(Array(held.enumerated()), id: \.offset) { i, line in
+                    HStack(spacing: 6) {
+                        Text(line).lineLimit(1).font(Typo.sans(Typo.Size.callout)).foregroundStyle(skin.ink)
+                        Button { held.remove(at: i) } label: {
+                            Image(systemName: "xmark").font(Typo.icon(10, .bold)).foregroundStyle(skin.inkDim)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .background(paintedChrome(Capsule(), skin: skin))
+                }
+                Text("按发送键一起发出去").font(Typo.sans(Typo.Size.caption)).foregroundStyle(skin.inkDim)
+            }
+        }
         // 群里打了 @：输入框上面一排成员（10-11）。放在排版里而不是浮层——浮出底栏的部分点不到
         if showMentions {
             ScrollView(.horizontal, showsIndicators: false) {
@@ -2346,9 +2466,7 @@ private struct DraftField: View {
             .submitLabel(.send)
             .onSubmit {
                 guard sendable else { return }
-                let text = draft
-                draft = ""
-                onSend(text)
+                if !held.isEmpty { hold() } else { flush() }   // 正在攒：回车接着攒，发送键才发
                 focused = true          // 发完键盘不缩回去，接着聊
             }
             .onReceive(NotificationCenter.default.publisher(for: ChatView.selfTestFocus)) { note in
@@ -2372,23 +2490,57 @@ private struct DraftField: View {
             }
         }
         .onChange(of: showMentions) { _, _ in onHeightChange(0) }
+        .onChange(of: held.count) { _, _ in onHeightChange(0) }
+        .onChange(of: hasStaged) { _, _ in onHeightChange(0) }
 
         }
         if let onVoice, !sendable {
             VoiceRecordButton(skin: skin, active: $voiceActive, onSend: onVoice)
         } else {
-        Button {
-            let text = draft
-            draft = ""
-            onSend(text)
-        } label: {
-            Image(systemName: "arrow.up")
-                .font(Typo.icon(16, .bold))
-                .foregroundStyle(theme.accent)
-                .frame(width: 36, height: 36)
-                .background(paintedChrome(Circle(), skin: skin))
+        Image(systemName: "arrow.up")
+            .font(Typo.icon(16, .bold))
+            .foregroundStyle(theme.accent)
+            .frame(width: 36, height: 36)
+            .background(paintedChrome(Circle(), skin: skin))
+            .contentShape(Circle())
+            .gesture(LongPressGesture(minimumDuration: 0.4).onEnded { _ in hold() }
+                .exclusively(before: TapGesture().onEnded { flush() }))
+            .accessibilityAddTraits(.isButton)
+            .accessibilityLabel(Text("发送"))
+            .accessibilityAction { flush() }
+            .allowsHitTesting(sendable)
+            .opacity(sendable ? 1 : 0.5)
         }
-        .disabled(!sendable)
+    }
+}
+
+/// 改 TA 说过的一泡（11-07）
+private struct EditReplySheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var text: String
+    let onSave: (String) -> Void
+
+    init(original: String, onSave: @escaping (String) -> Void) {
+        _text = State(initialValue: original)
+        self.onSave = onSave
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("TA 这句", text: $text, axis: .vertical).lineLimit(3...12)
+                } footer: { Text("只改这一条气泡。TA 接下来看到的就是改过的这句。") }
+            }
+            .navigationTitle("改这句")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("存") { onSave(text); dismiss() }
+                        .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
         }
     }
 }

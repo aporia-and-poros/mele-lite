@@ -120,6 +120,27 @@ async def device_via_host(body: dict = Body(...), acc: UUID = Depends(account), 
     return {"relay_id": rid}
 
 
+@router.post("/me/feedback")
+async def feedback_via_host(body: dict = Body(...), acc: UUID = Depends(account), a: Api = Depends(api)):
+    """内测反馈小卡片（11-05 内测：国内打不开 workers.dev，App 里一直交不上）：手机交给自己的 Host，Host 原样转给推送中转的 /feedback。
+    只转，不存；中转那边照常验内容、防连点"""
+    if not a.cfg.push_relay:
+        raise HTTPException(409, "这台 Host 没开推送中转")
+    try:
+        status = await _relay_feedback(a.cfg.push_relay, body)
+    except Exception:
+        raise HTTPException(502, "Host 也连不上推送中转站")
+    if status != 200:
+        raise HTTPException(400 if status == 400 else 502, "没交上去")
+    return {"ok": True}
+
+
+async def _relay_feedback(relay: str, body: dict) -> int:
+    import httpx
+    async with httpx.AsyncClient(timeout=15) as c:
+        return (await c.post(f"{relay.rstrip('/')}/feedback", json=body)).status_code
+
+
 @router.post("/me/voip", status_code=204)
 async def voip_device(body: dict = Body(...), acc: UUID = Depends(account), a: Api = Depends(api)):
     """TA 打给你（10-31）：手机在推送中转登记了 VoIP 设备号，把编号、口令、加密钥匙交给 Host"""

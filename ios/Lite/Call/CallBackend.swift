@@ -40,6 +40,7 @@ final class LocalCallBackend: CallBackend {
     let zh: Bool
     let voiceKind: CallVoice.Kind
     private let voiceID: String
+    private let voiceModel: String
 
     init(conversation: String) {
         conv = conversation
@@ -47,6 +48,7 @@ final class LocalCallBackend: CallBackend {
         zh = (settings["lang"] as? String ?? "zh") == "zh"
         voiceKind = CallVoice.kind(settings)
         voiceID = LocalVoice.voiceID(settings)
+        voiceModel = LocalVoice.model(settings)
     }
 
     var canHear: Bool { CallHearing.route(host) != nil }
@@ -61,7 +63,7 @@ final class LocalCallBackend: CallBackend {
 
     func voice(_ line: String, prev: String?, callID: String) -> AsyncThrowingStream<AVAudioPCMBuffer, Error> {
         guard let k = LocalVoice.key(host) else { return AsyncThrowingStream { $0.finish() } }
-        return CallVoice.eleven(line, key: k, voiceID: voiceID, kind: voiceKind, prev: prev)
+        return CallVoice.eleven(line, key: k, voiceID: voiceID, kind: voiceKind, expressiveModel: voiceModel, prev: prev)
     }
 
     func turn(_ text: String, link: CallLink) async { await host.brain.callTurn(conv, text: text, link: link) }

@@ -14,6 +14,12 @@ enum LocalVoice {
     static let keyID = "elevenlabs"
     static let noteModel = "eleven_v4"
     static let defaultTag = "[warm, relaxed, natural] "     // 稿子里一个标签都没有时先垫这一个（10-03 Aporia A/B）
+    /// 语音条能选的模型（11-07，内测）：照 server/llm/tts.py。key 没开「看模型」权限时就给这张表
+    static let modelChoices: [(id: String, name: String)] = [
+        ("eleven_v4", "Eleven v4"), ("eleven_v4_turbo", "Eleven v4 Turbo"), ("eleven_v3", "Eleven v3"),
+        ("eleven_v3_conversational", "Eleven v3 Conversational"), ("eleven_multilingual_v2", "Multilingual v2"),
+        ("eleven_flash_v2_5", "Flash v2.5"), ("eleven_turbo_v2_5", "Turbo v2.5"),
+    ]
     static let presets: [(key: String, id: String, name: String, gender: String, zh: String, en: String)] = [
         ("lauren", "DODLEQrClDo8wCz460ld", "Lauren", "female", "温柔、让人安心", "friendly, comforting, soft"),
         ("hope", "uYXf8XasLslADfZ2MB4u", "Hope", "female", "明亮、活泼、爱聊天", "bubbly, chatty, bright"),
@@ -27,9 +33,18 @@ enum LocalVoice {
                          "network": String(localized: "连不上 ElevenLabs"),
                          "bad_request": String(localized: "这句念不了"),
                          "too_long": String(localized: "语音最长 2 分钟"),
+                         "voice_not_found": String(localized: "ElevenLabs 找不到这把嗓子，检查一下音色 ID"),
+                         "model_not_found": String(localized: "这把 key 用不了这个模型，换一个试试"),
                          "missing_permissions": String(localized: "这把 ElevenLabs key 少了权限：在 ElevenLabs 后台给它打开 Text to Speech、Speech to Text 和 Voices")]
 
     struct Fail: Error { let kind: String }
+
+    /// ElevenLabs 回的错归一类。这几种它说得清楚，单独拎出来提示才说得准（missing_permissions：10-04 实测，只开了部分权限的 key）
+    static func failKind(status: Int, body: Data) -> String {
+        let text = String(decoding: body, as: UTF8.self)
+        if let named = ["missing_permissions", "voice_not_found", "model_not_found"].first(where: { text.contains($0) }) { return named }
+        return [401, 403].contains(status) ? "auth" : [402, 429].contains(status) ? "quota" : status < 500 ? "bad_request" : "server"
+    }
 
     // MARK: 路由
 
@@ -46,6 +61,10 @@ enum LocalVoice {
                   let url = Bundle.main.url(forResource: "\(p[2])-\(lang)", withExtension: "mp3"),
                   let d = try? Data(contentsOf: url) else { return .error(404, String(localized: "没有这把")) }
             return .data(d, mime: "audio/mpeg")
+        case ("GET", 2) where p == ["voice", "library"]:
+            return await library(host)
+        case ("GET", 2) where p == ["voice", "models"]:
+            return await models(host)
         case ("GET", 2) where p == ["voice", "quota"]:
             return .json(["chars_left": 0, "own_key": key(host) != nil])
         case ("POST", 2) where p == ["keys", "elevenlabs"]:
@@ -82,6 +101,21 @@ enum LocalVoice {
         return .json(["last4": String(k.suffix(4))], status: 201)
     }
 
+    /// 音色库（11-07）：这把 key 账号里所有的嗓子
+    private static func library(_ host: LocalHost) async -> LocalResponse {
+        guard let k = key(host) else { return .error(403, errors["no_key"]!) }
+        do { return .json(try await ElevenLabs(key: k).voices()) } catch let f as Fail { return err(f.kind) } catch { return err("network") }
+    }
+
+    /// 能选的模型：出厂那几个排前面，ElevenLabs 那边多出来的跟在后面。key 没开「看模型」权限、连不上，就只有出厂的
+    private static func models(_ host: LocalHost) async -> LocalResponse {
+        var got: [(id: String, name: String)] = []
+        if let k = key(host) { got = (try? await ElevenLabs(key: k).models()) ?? [] }
+        let factory = modelChoices.map { m in (id: m.id, name: got.first { $0.id == m.id }?.name ?? m.name) }
+        let extra = got.filter { g in !modelChoices.contains { $0.id == g.id } }
+        return .json((factory + extra).map { ["id": $0.id, "name": $0.name, "tags": takesTags($0.id)] as [String: Any] })
+    }
+
     private static func design(_ host: LocalHost, _ desc: String) async -> LocalResponse {
         let d = desc.trimmingCharacters(in: .whitespacesAndNewlines)
         guard (8...400).contains(d.count) else { return .error(400, String(localized: "描述写 8～400 个字")) }
@@ -91,8 +125,13 @@ enum LocalVoice {
 
     private static func choose(_ host: LocalHost, companion cid: String, _ b: [String: Any]) async -> LocalResponse {
         guard var c = host.store.companion(cid) else { return .error(404, String(localized: "没有这个联系人")) }
-        let name = String((b["name"] as? String ?? "").split(whereSeparator: \.isWhitespace).joined(separator: " ").prefix(30))
-        var voiceID = (b["voice_id"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+        // 音色库里的名字常常是「Adam - Distinct, Deep and Engaging」：只留破折号前面
+        let tidy = { (s: String) in
+            let one = s.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            return String((one.range(of: #"\s[-–—]\s"#, options: .regularExpression).map { String(one[..<$0.lowerBound]) } ?? one).prefix(30))
+        }
+        var name = tidy(b["name"] as? String ?? "")
+        var voiceID = (b["voice_id"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if let gid = b["generated_voice_id"] as? String, !gid.isEmpty {
             guard let k = key(host) else { return .error(403, errors["no_key"]!) }
             do {
@@ -102,6 +141,15 @@ enum LocalVoice {
                 voiceID = try await el.saveDesign(name: name.isEmpty ? "Mele voice" : name,
                                                   description: String((b["description"] as? String ?? "").prefix(400)), generated: gid)
             } catch let f as Fail { return err(f.kind) } catch { return err("network") }
+        } else if !voiceID.isEmpty {
+            // 会拼进 ElevenLabs 的地址里，只放这些字符（别的字符还会让拼地址那一步直接崩）
+            guard voiceID.range(of: #"^[A-Za-z0-9_-]{8,64}$"#, options: .regularExpression) != nil else {
+                return .error(400, String(localized: "这不像音色 ID：只有英文字母和数字，一般 20 位"))
+            }
+            if name.isEmpty {       // 手填的：查个名字，查不到不拦（没加进账号的公共音色查不到，但念得出来）
+                if let k = key(host), let n = try? await ElevenLabs(key: k).voiceName(voiceID) { name = tidy(n) }
+                if name.isEmpty { name = voiceID.prefix(8) + "…" }
+            }
         }
         guard !voiceID.isEmpty else { return .error(400, String(localized: "要给 voice_id 或 generated_voice_id")) }
         var s = c["settings"] as? [String: Any] ?? [:]
@@ -143,6 +191,24 @@ enum LocalVoice {
 
     static func sha(_ s: String) -> String { SHA256.hash(data: Data(s.utf8)).map { String(format: "%02x", $0) }.joined() }
 
+    /// 语音条用哪个模型（11-07）：没选过 = 默认
+    static func model(_ settings: [String: Any]) -> String {
+        let m = (settings["voice_model"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+        return m.isEmpty ? noteModel : m
+    }
+
+    /// 这个模型认不认 [soft, tired] 这种音频标签（v3 起才认；别的模型会把标签照字念出来）
+    static func takesTags(_ model: String) -> Bool { model.range(of: #"^eleven_v\d"#, options: .regularExpression) != nil }
+
+    /// v3 不收前后句（11-07 实测 400 unsupported_model），带了整句念不了
+    static func takesContext(_ model: String) -> Bool { !model.hasPrefix("eleven_v3") }
+
+    /// 真正送去念的稿子。认标签的模型：一个标签都没有就垫一个；不认的：把标签去掉
+    static func script(_ text: String, model: String) -> String {
+        guard takesTags(model) else { return stripTags(text) }
+        return tagRE.firstMatch(in: text, range: NSRange(location: 0, length: (text as NSString).length)) == nil ? defaultTag + text : text
+    }
+
     static func voiceID(_ settings: [String: Any]) -> String {
         let v = (settings["voice_id"] as? String ?? "").trimmingCharacters(in: .whitespaces)
         return v.isEmpty ? presets[0].id : v
@@ -151,17 +217,18 @@ enum LocalVoice {
     // MARK: 念
 
     /// 念一句（有缓存就不花钱）。返回 {id, duration_ms}
-    static func speak(_ host: LocalHost, text raw: String, voiceID: String, prev: String? = nil, next: String? = nil) async throws -> [String: Any] {
+    static func speak(_ host: LocalHost, text raw: String, voiceID: String, model: String = noteModel, prev: String? = nil, next: String? = nil) async throws -> [String: Any] {
         let plain = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !plain.isEmpty else { throw Fail(kind: "bad_request") }
+        let text = script(plain, model: model)
+        guard !text.isEmpty else { throw Fail(kind: "bad_request") }
         guard let k = key(host) else { throw Fail(kind: "no_key") }
-        let text = tagRE.firstMatch(in: plain, range: NSRange(location: 0, length: (plain as NSString).length)) == nil ? defaultTag + plain : plain
-        let fp = sha("\(noteModel)\n\(voiceID)\n\(text)")
+        let fp = sha("\(model)\n\(voiceID)\n\(text)")
         var cache = host.store.read("voice-cache.json") as? [String: [String: Any]] ?? [:]
         if let hit = cache[fp], let id = hit["id"] as? String, FileManager.default.fileExists(atPath: host.store.fileURL("voice-\(id).mp3").path) {
             return hit
         }
-        let mp3 = try await ElevenLabs(key: k).synth(text, voiceID: voiceID, prev: prev, next: next)
+        let mp3 = try await ElevenLabs(key: k).synth(text, voiceID: voiceID, model: model, prev: prev, next: next)
         let id = UUID().uuidString.lowercased()
         host.store.saveFile(mp3, name: "voice-\(id).mp3")
         let clip: [String: Any] = ["id": id, "duration_ms": mp3.count * 8 / 128]       // 128kbps 估时长，够气泡上显示用
@@ -185,7 +252,7 @@ enum LocalVoice {
         let note = isVoice(b)
         let near = { (j: Int) -> String? in note && bubbles.indices.contains(j) ? asText(bubbles[j]) : nil }
         do {
-            let clip = try await speak(host, text: note ? body(b) : b, voiceID: voiceID(settings), prev: near(index - 1), next: near(index + 1))
+            let clip = try await speak(host, text: note ? body(b) : b, voiceID: voiceID(settings), model: model(settings), prev: near(index - 1), next: near(index + 1))
             if note, let (c, at) = host.store.locate(message: mid) {      // 下次翻历史直接是念好的那段
                 var list = host.store.messages(c)
                 var clips = list[at]["voice_clips"] as? [String: Any] ?? [:]
@@ -386,21 +453,43 @@ struct ElevenLabs {
         do { (data, resp) = try await URLSession.shared.data(for: req) } catch { throw LocalVoice.Fail(kind: "network") }
         let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
         if status >= 400 {
-            // 只开了部分权限的 key（10-04 实测：借来的那把没有 models_read）：key 是对的，只是这一项没权限
-            if String(decoding: data, as: UTF8.self).contains("missing_permissions") { throw LocalVoice.Fail(kind: "missing_permissions") }
-            throw LocalVoice.Fail(kind: [401, 403].contains(status) ? "auth" : [402, 429].contains(status) ? "quota"
-                                        : status < 500 ? "bad_request" : "server")
+            throw LocalVoice.Fail(kind: LocalVoice.failKind(status: status, body: data))
         }
         return data
     }
 
     private func object(_ d: Data) -> [String: Any] { (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] ?? [:] }
 
-    func synth(_ text: String, voiceID: String, prev: String?, next: String?) async throws -> Data {
-        var body: [String: Any] = ["text": text, "model_id": LocalVoice.noteModel, "voice_settings": ["stability": 0.5]]
-        if let prev, !prev.isEmpty { body["previous_text"] = prev }
-        if let next, !next.isEmpty { body["next_text"] = next }
+    func synth(_ text: String, voiceID: String, model: String, prev: String?, next: String?) async throws -> Data {
+        var body: [String: Any] = ["text": text, "model_id": model, "voice_settings": ["stability": 0.5]]
+        if LocalVoice.takesContext(model) {
+            if let prev, !prev.isEmpty { body["previous_text"] = prev }
+            if let next, !next.isEmpty { body["next_text"] = next }
+        }
         return try await request("POST", "/v1/text-to-speech/\(voiceID)", query: ["output_format": "mp3_44100_128"], json: body)
+    }
+
+    /// 账号里所有的嗓子（自己克隆的、设计的、收藏的、官方的）
+    func voices() async throws -> [[String: Any]] {
+        let list = object(try await request("GET", "/v1/voices"))["voices"] as? [[String: Any]] ?? []
+        return list.compactMap { v in
+            guard let id = v["voice_id"] as? String else { return nil }
+            return ["voice_id": id, "name": v["name"] as? String ?? "", "category": v["category"] as? String ?? "",
+                    "about": v["description"] as? String ?? "", "preview": v["preview_url"] as? String ?? ""]
+        }
+    }
+
+    func voiceName(_ id: String) async throws -> String {
+        object(try await request("GET", "/v1/voices/\(id)"))["name"] as? String ?? ""
+    }
+
+    /// 能合成的模型（key 要开「看模型」权限）
+    func models() async throws -> [(id: String, name: String)] {
+        let list = (try? JSONSerialization.jsonObject(with: try await request("GET", "/v1/models"))) as? [[String: Any]] ?? []
+        return list.compactMap { m in
+            guard m["can_do_text_to_speech"] as? Bool == true, let id = m["model_id"] as? String else { return nil }
+            return (id, m["name"] as? String ?? id)
+        }
     }
 
     func design(_ description: String) async throws -> [[String: Any]] {

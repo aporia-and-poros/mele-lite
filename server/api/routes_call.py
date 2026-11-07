@@ -24,7 +24,7 @@ from brain.call_speech import CallCtx
 from brain.monologue import _ZH_PRONOUN
 from brain.settings import Settings
 from brain.turn import run_turn
-from llm.tts import NOTE_MODEL, TTSError
+from llm.tts import TTSError
 
 from .deps import Api, account, api, own_conversation
 
@@ -198,8 +198,8 @@ async def tts(conv: UUID, body: dict = Body(...), acc: UUID = Depends(account), 
     if not own and await V.quota(a.deps.pool, acc) < len(text):
         raise HTTPException(402, "quota")
     expressive = (body.get("kind") or settings.call_voice) == "expressive"
-    model = NOTE_MODEL if expressive else FAST_MODEL
-    said = V.DEFAULT_TAG + text if expressive else text
+    model = await V.model_for(a.deps, acc, settings) if expressive else FAST_MODEL
+    said = V.script(text, model) if expressive else text
     voice_id = settings.voice_id or V.default_voice()
     chunks = engine.stream_pcm(said, voice_id, model, previous_text=str(body.get("prev") or "") or None)
     try:

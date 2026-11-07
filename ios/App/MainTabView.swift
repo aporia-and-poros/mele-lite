@@ -64,7 +64,7 @@ struct MainTabView: View {
             }
 
             if feedbackShown {
-                FeedbackCard { feedbackShown = false }
+                FeedbackCard(api: model.api) { feedbackShown = false }
                     .transition(.opacity)
                     .zIndex(5)
             }

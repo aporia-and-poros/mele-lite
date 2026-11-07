@@ -13,7 +13,7 @@ import asyncpg
 from llm.types import Usage
 
 SCHEMA_FILE = Path(__file__).with_name("schema.sql")
-_MSG_COLS = "id, role, text, thinking, created_at, tools, parts, cards, thinking_ms, inner_voice, speaker_id, speaker_name, translations, call"
+_MSG_COLS = "id, role, text, thinking, created_at, tools, parts, cards, thinking_ms, inner_voice, speaker_id, speaker_name, translations, call, variants, variant"
 _JSON_TABLES = ("user_settings", "user_state")
 USER_SIDE = ("user", "wake")      # 历史里算用户那一侧的：TA 说的话、叫醒它的〔醒来〕
 _ALL_TABLES = ("chat_messages", "ledger_days", "user_settings", "user_state", "personas", "turn_logs",
@@ -35,6 +35,8 @@ class StoredMsg:
     speaker: UUID | None = None      # 群里是哪个 TA 说的（10-11）；私聊是 None
     speaker_name: str = ""
     translations: list | None = None     # 双语气泡（10-15）：跟气泡一一对应的译文
+    variants: list[str] | None = None    # 重新回留下的几版（11-07），含现在这版
+    variant: int | None = None           # 现在显示第几版
     call: dict | None = None             # 电话（10-31）：{id, cut, end, seconds, line}；不是电话里的话是 None
 
 
@@ -47,7 +49,7 @@ def _msg(r) -> StoredMsg:
         return json.loads(v) if isinstance(v, str) else v
     return StoredMsg(r["id"], r["role"], r["text"], r["thinking"], r["created_at"], r["tools"],
                      js(r["parts"]), js(r["cards"]), r["thinking_ms"], r["inner_voice"] or "",
-                     r["speaker_id"], r["speaker_name"] or "", js(r["translations"]), js(r["call"]))
+                     r["speaker_id"], r["speaker_name"] or "", js(r["translations"]), js(r["variants"]), r["variant"], js(r["call"]))
 
 
 async def apply_brain_schema(dsn: str) -> None:
@@ -71,6 +73,18 @@ async def add_message(pool, user_id: UUID, role: str, text: str, *, thinking: st
         json.dumps(cards, ensure_ascii=False) if cards else None, thinking_ms if thinking.strip() else None, inner_voice,
         speaker, speaker_name, _translations(translations), json.dumps(call, ensure_ascii=False) if call else None)
     return _msg(r)
+
+
+async def set_variants(pool, message_id: int, variants: list[str], index: int) -> None:
+    await pool.execute("UPDATE chat_messages SET variants = $2::jsonb, variant = $3 WHERE id = $1",
+                       message_id, json.dumps(variants, ensure_ascii=False), index)
+
+
+async def set_reply_text(pool, message_id: int, text: str, *, variants: list[str] | None = None, index: int | None = None) -> None:
+    """改 TA 说过的话 / 换到另一版（11-07）。气泡切法变了，那条上的译文作废。"""
+    await pool.execute("UPDATE chat_messages SET text = $2, translations = NULL, variants = COALESCE($3::jsonb, variants), "
+                       "variant = COALESCE($4, variant) WHERE id = $1", message_id, text,
+                       json.dumps(variants, ensure_ascii=False) if variants is not None else None, index)
 
 
 async def set_call_text(pool, message_id: int, text: str, call: dict) -> None:

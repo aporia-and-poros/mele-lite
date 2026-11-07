@@ -189,6 +189,26 @@ async def test_host_registers_with_relay_for_the_phone(pool, monkeypatch):
     assert dict(row) == {"apns_token": "relay:rid9", "relay_secret": "sec9", "push_key": key}
 
 
+async def test_host_forwards_feedback_to_relay(pool, monkeypatch):
+    """内测反馈（11-05：国内打不开 workers.dev，卡片一直交不上）：连 Host 的交给 Host，Host 原样转给中转站"""
+    import api.routes_patrol as R
+    sent = []
+
+    async def fake(relay, body):
+        sent.append((relay, body))
+        return 400 if body.get("bad") else 200
+    monkeypatch.setattr(R, "_relay_feedback", fake)
+    e = Env(pool, [])
+    t = await e.login()
+    async with e.client(t) as c:
+        assert (await c.post("/me/feedback", json={"answers": {}})).status_code == 409        # 没开中转
+        e.app.state.api.cfg.push_relay = "https://relay.test"
+        r = await c.post("/me/feedback", json={"answers": {"problems": "有一点"}})
+        assert r.status_code == 200 and r.json() == {"ok": True}
+        assert (await c.post("/me/feedback", json={"bad": True})).status_code == 400
+    assert sent[0] == ("https://relay.test", {"answers": {"problems": "有一点"}})
+
+
 async def test_same_phone_keeps_only_newest_relay_device(pool, monkeypatch):
     """每次打开 App 都会再登记一次：同一把加密钥匙只留最新的，不然一条消息推好几遍（10-12）"""
     import api.routes_patrol as R
