@@ -20,11 +20,12 @@ enum LocalChores {
         host.store.write("chores.json", ["chores": table, "draw_model": drawModel] as [String: Any])
     }
 
-    /// 钥匙 id → 哪家（ElevenLabs 那把也算）
+    /// 钥匙 id → 哪家（ElevenLabs、MiniMax 那把也算）
     static func live(_ host: LocalHost) -> [String: String] {
         var out: [String: String] = [:]
         for k in host.keys { if let id = k["id"] as? String { out[id] = k["provider"] as? String ?? "" } }
         if LocalVoice.key(host) != nil { out[LocalVoice.keyID] = "elevenlabs" }
+        if LocalVoice.key(host, provider: "minimax") != nil { out[LocalVoice.mmKeyID] = "minimax" }
         return out
     }
 
@@ -35,10 +36,14 @@ enum LocalChores {
             rows.append(["id": LocalVoice.keyID, "provider": "elevenlabs", "chat_model": "", "last4": String(v.suffix(4)),
                          "base_url": NSNull()])
         }
+        if let v = LocalVoice.key(host, provider: "minimax") {
+            rows.append(["id": LocalVoice.mmKeyID, "provider": "minimax", "chat_model": "", "last4": String(v.suffix(4)),
+                         "base_url": host.vault.get(LocalVoice.mmBaseID) ?? NSNull()])
+        }
         return rows.map { k in
             var k = k
             let id = k["id"] as? String ?? "", p = k["provider"] as? String ?? ""
-            let mine = p == "elevenlabs" ? ["voice"] : Chores.all.filter { t[$0] == id }
+            let mine = LocalVoice.providers.contains(p) ? ["voice"] : Chores.all.filter { t[$0] == id }
             k["chores"] = mine
             k["can"] = Chores.can(p)
             k["draw_model"] = mine.contains("draw") ? dm : ""
@@ -48,7 +53,7 @@ enum LocalChores {
 
     static func patch(_ host: LocalHost, key id: String, _ b: [String: Any]) -> LocalResponse {
         guard let p = live(host)[id] else { return .error(404, String(localized: "没有这把钥匙")) }
-        if let m = b["chat_model"] as? String, p != "elevenlabs" {      // 换聊天模型（10-29 内测：不用再加一把）
+        if let m = b["chat_model"] as? String, !LocalVoice.providers.contains(p) {      // 换聊天模型（10-29 内测：不用再加一把）
             let model = String(m.trimmingCharacters(in: .whitespacesAndNewlines).prefix(100))
             guard !model.isEmpty else { return .error(400, String(localized: "要填一个聊天用的模型")) }
             host.store.write("keys.json", host.keys.map { k in
@@ -60,7 +65,7 @@ enum LocalChores {
         }
         var (t, dm) = table(host)
         var moved: [[String: String]] = []
-        if let list = b["chores"] as? [String], p != "elevenlabs" {
+        if let list = b["chores"] as? [String], !LocalVoice.providers.contains(p) {
             do { (t, moved) = try Chores.assign(t, key: id, provider: p, chores: list) }
             catch { return .error(400, String(localized: "这家干不了这样活")) }
         }

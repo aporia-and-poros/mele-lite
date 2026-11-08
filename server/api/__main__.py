@@ -111,6 +111,7 @@ async def main(args) -> None:
     if args.demo:
         fake_tts = FakeTTS()
         deps.tts_for, deps.tts_key = (lambda k: fake_tts), "demo"
+        deps.minimax_for = lambda k, base: fake_tts       # MiniMax（11-08）演示也用假合成
     else:
         deps.tts_for, deps.tts_key = ElevenLabs, os.environ.get("NEWAPP_ELEVENLABS_KEY", "").strip()
     if args.demo:

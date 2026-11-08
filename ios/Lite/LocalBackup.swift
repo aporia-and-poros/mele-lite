@@ -59,6 +59,9 @@ enum LocalBackup {
                     keys.append(["vault": "model", "id": id, "secret": secret])
                 }
             }
+            for id in [LocalVoice.keyID, LocalVoice.mmKeyID, LocalVoice.mmBaseID] {     // 声音的 key（11-08 补上）
+                if let secret = host.vault.get(id) { keys.append(["vault": "model", "id": id, "secret": secret]) }
+            }
             for sv in host.mcp.servers(host.store) {
                 if let secret = host.mcp.vault.get(sv.id) {
                     keys.append(["vault": "mcp", "id": sv.id, "secret": secret])

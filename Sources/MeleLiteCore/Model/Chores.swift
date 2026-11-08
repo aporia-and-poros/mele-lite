@@ -15,7 +15,7 @@ public enum Chores {
     public static func can(_ provider: String) -> [String] {
         let no: Set<String>
         switch provider {
-        case "elevenlabs": no = Set(all).subtracting(["voice"])
+        case "elevenlabs", "minimax": no = Set(all).subtracting(["voice"])
         case "deepseek": no = sees.union(["draw", "voice"])
         case "anthropic": no = ["draw", "voice"]
         default: no = ["voice"]

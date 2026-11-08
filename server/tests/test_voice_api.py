@@ -46,7 +46,7 @@ async def test_design_gate_and_choose(pool, tmp_path):
         comp, _ = await e.first_window(c)
         assert (await c.post("/voice/design", json={"description": "低一点、懒洋洋的、带点气声"})).status_code == 403
         ok = await c.post(f"/companions/{comp['id']}/voice", json={"voice_id": "v_preset", "name": "Aria"})
-        assert ok.json() == {"voice_id": "v_preset", "voice_name": "Aria"}
+        assert ok.json() == {"voice_id": "v_preset", "voice_name": "Aria", "provider": "elevenlabs"}
         got = (await c.get(f"/companions/{comp['id']}")).json()["settings"]
         assert got["voice_id"] == "v_preset" and got["voice_name"] == "Aria"
         assert (await c.post("/keys/elevenlabs", json={"api_key": "sk_mine_12345678"})).status_code == 201
@@ -97,7 +97,7 @@ async def test_choose_by_pasted_id(pool, tmp_path):
         for bad in ["有中文的音色id在这里", "abc", "abcdefgh/../../v1/user", "abc def ghi jkl"]:
             assert (await c.post(path, json={"voice_id": bad})).status_code == 400
         ok = await c.post(path, json={"voice_id": " o22kMsJiTnoh4MMiZemc "})
-        assert ok.json() == {"voice_id": "o22kMsJiTnoh4MMiZemc", "voice_name": "Found Voice"}
+        assert ok.json() == {"voice_id": "o22kMsJiTnoh4MMiZemc", "voice_name": "Found Voice", "provider": "elevenlabs"}
         long = await c.post(path, json={"voice_id": "v_preset_1", "name": "Adam - Distinct, Deep and Engaging"})
         assert long.json()["voice_name"] == "Adam"
         fake.fail = "voice_not_found"                                            # 查不到名字也存：公共音色查不到但念得出来

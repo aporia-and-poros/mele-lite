@@ -187,7 +187,7 @@ struct KeychainCard: View {
                 HStack(spacing: 10) {
                     Image(systemName: "key.fill").font(Typo.icon(13)).foregroundStyle(theme.accentDeep)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(k.provider == "elevenlabs" ? Self.providerName(k.provider) : "\(Self.providerName(k.provider)) · \(k.chatModel)")
+                        Text(Self.voiceOnly(k.provider) ? Self.providerName(k.provider) : "\(Self.providerName(k.provider)) · \(k.chatModel)")
                             .font(Typo.sans(Typo.Size.body)).foregroundStyle(theme.ink)
                         Text("••••\(k.last4)").font(Typo.number(Typo.Size.caption, .regular)).foregroundStyle(theme.inkFaint)
                         let tags = ChoreNames.tags(k.chores)
@@ -245,8 +245,11 @@ struct KeychainCard: View {
 
     static func providerName(_ p: String) -> String {
         ["deepseek": "DeepSeek", "anthropic": "Claude", "openai": "OpenAI", "gemini": "Gemini",
-         "openai-compatible": String(localized: "兼容 OpenAI"), "elevenlabs": "ElevenLabs"][p] ?? p
+         "openai-compatible": String(localized: "兼容 OpenAI"), "elevenlabs": "ElevenLabs", "minimax": "MiniMax"][p] ?? p
     }
+
+    /// 只管声音的几家（不聊天、不选模型）
+    static func voiceOnly(_ p: String) -> Bool { p == "elevenlabs" || p == "minimax" }
 }
 
 struct ModelDTO: Decodable, Identifiable, Hashable {
@@ -276,7 +279,7 @@ struct AddKeyView: View {
     @State private var fetching = false
     @State private var fetchNote: String?
 
-    private let providers = ["deepseek", "anthropic", "openai", "gemini", "openai-compatible", "elevenlabs"]
+    private let providers = ["deepseek", "anthropic", "openai", "gemini", "openai-compatible", "elevenlabs", "minimax"]
 
     var body: some View {
         NavigationStack {
@@ -302,13 +305,16 @@ struct AddKeyView: View {
                         #else
                         Text("key 加密存在服务器上，谁都看不到原文；这里只显示后 4 位。")
                         #endif
+                        if provider == "minimax" {
+                            Text("MiniMax 只管声音（语音条、念给我听、电话、听你的语音）。国内版（minimaxi.com）、国际版（minimax.io）的 key 都行，会自己认出来。")
+                        }
                         if provider == "openai-compatible" || provider == "anthropic" {
                             Text("在中转站用 Claude 的模型：选「Claude」、填中转站地址（中转站要支持 Claude 原生接口）。这样才走缓存，每句便宜很多；选「兼容 OpenAI」用 Claude 是每句全价。")
                         }
                     }
                 }
 
-                if provider != "elevenlabs" {      // ElevenLabs 只管声音，不选模型（10-15）
+                if !KeychainCard.voiceOnly(provider) {      // ElevenLabs / MiniMax 只管声音，不选模型（10-15）
                 Section {
                     // 目录里的（带价钱）+ 从这家拉到的 + 手填的，都能多选：一个模型存一把钥匙（10-11 内测反馈）
                     ForEach(models) { m in
@@ -348,8 +354,8 @@ struct AddKeyView: View {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     if trying { ProgressView() } else {
-                        Button("存") { Task { provider == "elevenlabs" ? await saveVoiceKey() : await save() } }
-                            .disabled(apiKey.count < 8 || (provider != "elevenlabs" && pickedModels.isEmpty))
+                        Button("存") { Task { KeychainCard.voiceOnly(provider) ? await saveVoiceKey() : await save() } }
+                            .disabled(apiKey.count < 8 || (!KeychainCard.voiceOnly(provider) && pickedModels.isEmpty))
                     }
                 }
             }
@@ -459,7 +465,7 @@ struct AddKeyView: View {
     private func saveVoiceKey() async {
         trying = true; defer { trying = false }
         do {
-            _ = try await model.api.raw("POST", "keys/elevenlabs", json: ["api_key": apiKey.trimmingCharacters(in: .whitespacesAndNewlines)])
+            _ = try await model.api.raw("POST", "keys/\(provider)", json: ["api_key": apiKey.trimmingCharacters(in: .whitespacesAndNewlines)])
             onAdded("")
             dismiss()
         } catch {

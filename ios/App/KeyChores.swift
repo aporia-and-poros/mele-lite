@@ -60,9 +60,9 @@ struct KeyChoresSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                if key.provider == "elevenlabs" {
+                if KeychainCard.voiceOnly(key.provider) {
                     Section { Label(ChoreNames.label("voice"), systemImage: "checkmark") } footer: {
-                        Text("ElevenLabs 只管声音。TA 的档位和嗓子在 TA 的设定 → 声音里挑。")
+                        Text(String(localized: "\(KeychainCard.providerName(key.provider)) 只管声音。TA 用哪家、档位和嗓子在 TA 的设定 → 声音里挑。"))
                     }
                 } else {
                     Section {
@@ -117,7 +117,7 @@ struct KeyChoresSheet: View {
         do {
             var body: [String: Any] = ["chores": list, "draw_model": drawModel]
             let m = chatModel.trimmingCharacters(in: .whitespacesAndNewlines)
-            if key.provider != "elevenlabs", m != key.chatModel {
+            if !KeychainCard.voiceOnly(key.provider), m != key.chatModel {
                 guard !m.isEmpty else { note = String(localized: "要填一个聊天用的模型"); return }
                 body["chat_model"] = m
             }

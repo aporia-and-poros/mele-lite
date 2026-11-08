@@ -14,7 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
 
-from llm.tts import NOTE_MODEL, TTSError, takes_tags, tts_cost
+from llm.tts import (MM_FAST_MODEL, MM_HOSTS, MM_NOTE_MODEL, NOTE_MODEL, MiniMax, TTSError, is_minimax, strip_interjections,
+                     strip_minimax_marks, takes_interjections, takes_tags, tts_cost)
 
 from . import auth
 
@@ -33,15 +34,86 @@ PRESETS: list[dict] = [
      "about": {"zh": "低沉、松弛、好亲近", "en": "relaxed, deep, approachable"}},
 ]
 PRESET_DIR = Path(__file__).with_name("voice_presets")
+# MiniMax 出厂的几把（11-08）：只挑国内版、国际版两边都有的官方嗓子（两边的官方嗓子不全一样）。按 TA 的语言给，第一把 = 那个语言的默认。
+# 没有现成的试听：设置页点试听时拿用户自己的 key 念一句（/voice/sample，念过存着）。
+MM_PRESETS: dict[str, list[dict]] = {
+    "zh": [{"key": "mm-warm-girl", "voice_id": "Chinese (Mandarin)_Warm_Girl", "name": "温暖少女", "gender": "female",
+            "about": {"zh": "温暖、亲近", "en": "warm and close"}},
+           {"key": "mm-sweet-lady", "voice_id": "Chinese (Mandarin)_Sweet_Lady", "name": "甜美女声", "gender": "female",
+            "about": {"zh": "甜、柔", "en": "sweet and soft"}},
+           {"key": "mm-gentle-youth", "voice_id": "Chinese (Mandarin)_Gentle_Youth", "name": "温润青年", "gender": "male",
+            "about": {"zh": "年轻、温和", "en": "young and gentle"}},
+           {"key": "mm-gentleman", "voice_id": "Chinese (Mandarin)_Gentleman", "name": "温润男声", "gender": "male",
+            "about": {"zh": "成熟、稳", "en": "mature and steady"}}],
+    "en": [{"key": "mm-graceful-lady", "voice_id": "English_Graceful_Lady", "name": "Graceful Lady", "gender": "female",
+            "about": {"zh": "优雅、从容", "en": "graceful, unhurried"}},
+           {"key": "mm-whispering-girl", "voice_id": "English_Whispering_girl", "name": "Whispering Girl", "gender": "female",
+            "about": {"zh": "轻、带气声", "en": "soft and breathy"}},
+           {"key": "mm-gentle-man", "voice_id": "English_Gentle-voiced_man", "name": "Gentle-voiced Man", "gender": "male",
+            "about": {"zh": "温和的男声", "en": "gentle male voice"}},
+           {"key": "mm-diligent-man", "voice_id": "English_Diligent_Man", "name": "Diligent Man", "gender": "male",
+            "about": {"zh": "踏实、清楚", "en": "steady and clear"}}],
+}
+PROVIDERS = ("elevenlabs", "minimax")
 
 
-def presets_public(lang: str) -> list[dict]:
+def sample_path(voice_id: str, lang: str, provider: str = "minimax") -> str:
+    """没有现成试听的嗓子：App 点试听时来这里，拿用户自己的 key 念一句。"""
+    from urllib.parse import quote, urlencode
+    return "voice/sample?" + urlencode({"provider": provider, "voice_id": voice_id, "lang": lang}, quote_via=quote)
+
+
+def presets_public(lang: str, provider: str = "elevenlabs") -> list[dict]:
+    if provider == "minimax":
+        return [{"key": p["key"], "voice_id": p["voice_id"], "name": p["name"], "gender": p["gender"],
+                 "about": p["about"].get(lang, p["about"]["en"]), "preview": sample_path(p["voice_id"], lang)}
+                for p in MM_PRESETS.get(lang, MM_PRESETS["zh"])]
     return [{"key": p["key"], "voice_id": p["voice_id"], "name": p["name"], "gender": p["gender"],
              "about": p["about"].get(lang, p["about"]["en"]), "preview": f"voice/presets/{p['key']}/preview"}
             for p in PRESETS]
+
+
+def provider_of(settings) -> str:
+    p = getattr(settings, "voice_provider", "elevenlabs")
+    return p if p in PROVIDERS else "elevenlabs"
+
+
+def voice_id_of(settings) -> str:
+    """这个 TA 现在用的嗓子：哪家就读哪家那一格，空着就是那家出厂那把。"""
+    if provider_of(settings) == "minimax":
+        return settings.mm_voice_id or default_voice("minimax", settings.lang)
+    return settings.voice_id or default_voice()
+
+
+def note_model(provider: str) -> str:
+    return MM_NOTE_MODEL if provider == "minimax" else NOTE_MODEL
+
+
+def fast_model(provider: str) -> str:
+    """电话「快」那档。"""
+    return MM_FAST_MODEL if provider == "minimax" else "eleven_flash_v2_5"
 _TAG = re.compile(r"\[[^\[\]\n]{1,60}\]")
 # 稿子里一个标签都没有时先垫这一个（10-03 Aporia A/B：不带标签的中文念得平、念得怪，带了顺耳）
 DEFAULT_TAG = "[warm, relaxed, natural] "
+
+
+# MiniMax（11-08）：不认 [标签]；2.8 认 (laughs) 这类语气词，所有模型认 <#0.5#> 停顿。写法短，直接放在这几句里，不翻手册。
+MM_MODE_LINES = {
+    "zh": {"sometimes": "有些话用说的更好——晚安、安慰、笑出声、想 TA 的时候，就发语音条。",
+           "often": "你喜欢让 TA 听见你的声音，想说出声的时候就发语音条。",
+           "how": "格式就是单独一段、以 🎤 开头，后面直接写要说出口的话，比如：\n🎤 {example}\n这一段会念成你的语音条。\n怎么写：\n"
+                  "- 只写说出口的话，语言跟着你们聊天的语言走；不写方括号标签，也不写动作。\n"
+                  "- 停顿靠 …、换行和 —；想停久一点写 <#0.5#>（数字是秒，0.3～2），两个别挨着写。\n",
+           "interj": "- 笑、叹气、喘的时候，把这几个词原样夹在话里：(laughs) (chuckle) (sighs) (breath) (inhale) (exhale) (gasps) (sniffs) (humming) (emm)，一段一两处就够，每处换一个。\n",
+           "example": "晚安…(sighs) 早点睡，明天见。", "plain": "晚安…<#0.5#> 早点睡，明天见。"},
+    "en": {"sometimes": "Some things land better said out loud — goodnights, comfort, a laugh, missing them — so send a voice note.",
+           "often": "You like letting them hear your voice: whenever you want to say something out loud, send a voice note.",
+           "how": "The format is its own paragraph starting with 🎤, followed by the words you'll say, e.g.:\n🎤 {example}\nThat paragraph becomes your voice note.\nHow to write it:\n"
+                  "- Only words meant to be said, in the language you two are talking in; no square-bracket tags, no actions.\n"
+                  "- Pauses come from …, line breaks and —; for a longer one write <#0.5#> (seconds, 0.3–2), never two in a row.\n",
+           "interj": "- When you laugh, sigh or breathe, drop one of these into the words exactly as written: (laughs) (chuckle) (sighs) (breath) (inhale) (exhale) (gasps) (sniffs) (humming) (emm) — one or two per paragraph, a different one each time.\n",
+           "example": "Goodnight… (sighs) sleep well, see you tomorrow.", "plain": "Goodnight… <#0.5#> sleep well, see you tomorrow."},
+}
 
 
 # 「偶尔 / 常常」各一句，放在底子的语气那几行后面（换档会让缓存作废一次）。只写正面那半句（Aporia 10-03）。
@@ -53,7 +125,14 @@ MODE_LINES = {
 }
 
 
-def mode_lines(lang: str, mode: str) -> list[str]:
+def mode_lines(lang: str, mode: str, settings=None) -> list[str]:
+    if settings is not None and provider_of(settings) == "minimax":
+        t = MM_MODE_LINES.get(lang, MM_MODE_LINES["zh"])
+        if mode not in ("sometimes", "often"):
+            return []
+        interj = takes_interjections(settings.mm_voice_model or MM_NOTE_MODEL)
+        how = t["how"].format(example=t["example"] if interj else t["plain"]) + (t["interj"] if interj else "")
+        return [t[mode] + "\n" + how.rstrip()]
     line = MODE_LINES.get(lang, MODE_LINES["zh"]).get(mode)
     return [line] if line else []
 
@@ -88,14 +167,18 @@ def body(bubble: str) -> str:
 
 
 def strip_tags(text: str) -> str:
-    """给人看的逐字稿：去掉 [softly] 这类音频标签。"""
-    out = _TAG.sub("", text)
+    """给人看的逐字稿：去掉 [softly] 这类音频标签（MiniMax 的 (laughs)、<#0.5#> 也去掉）。"""
+    out = strip_minimax_marks(_TAG.sub("", text))
     out = re.sub(r"[ \t]{2,}", " ", out)
     return "\n".join(l.strip() for l in out.splitlines()).strip()
 
 
 def script(text: str, model: str) -> str:
-    """真正送去念的稿子。认标签的模型：一个标签都没有就垫一个；不认的（v2、flash）：把标签去掉，不然会照字念出来。"""
+    """真正送去念的稿子。认标签的模型：一个标签都没有就垫一个；不认的（v2、flash）：把标签去掉，不然会照字念出来。
+    MiniMax：[标签] 一律去掉；(laughs) 这类语气词只有 2.8 留着，<#0.5#> 停顿都留着。"""
+    if is_minimax(model):
+        out = re.sub(r"[ \t]{2,}", " ", _TAG.sub("", text)).strip()
+        return out if takes_interjections(model) else strip_interjections(out).strip()
     if not takes_tags(model):
         return strip_tags(text)
     return text if _TAG.search(text) else DEFAULT_TAG + text
@@ -120,13 +203,17 @@ def lazy_public(bubble: str) -> dict:
     return {"id": "n" + text_sha(b)[:20], "duration_ms": estimate_ms(b), "lazy": True}
 
 
-async def can_speak(deps, account: UUID, chars: int = 0) -> bool:
-    """这个账号现在能不能念：有钥匙；用我们的钥匙的还得剩够字。不能的话语音条直接当文字发。"""
-    try:
-        _, own = await engine(deps, account)
-    except VoiceError:
-        return False
-    return own or await quota(deps.pool, account) >= chars + len(DEFAULT_TAG)
+async def can_speak(deps, account: UUID, chars: int = 0, provider: str | None = None) -> bool:
+    """这个账号现在能不能念：有钥匙；用我们的钥匙的还得剩够字。不能的话语音条直接当文字发。
+    provider 空 = 哪家都行（翻历史时不分是哪个 TA）。"""
+    for p in ([provider] if provider else list(PROVIDERS)):
+        try:
+            _, own = await engine(deps, account, p)
+        except VoiceError:
+            continue
+        if own or await quota(deps.pool, account) >= chars + len(DEFAULT_TAG):
+            return True
+    return False
 
 
 def fingerprint(text: str, voice_id: str, model: str) -> str:
@@ -137,13 +224,18 @@ def text_sha(text: str) -> str:
     return hashlib.sha256(text.strip().encode()).hexdigest()
 
 
-def default_voice() -> str:
+def default_voice(provider: str = "elevenlabs", lang: str = "zh") -> str:
+    if provider == "minimax":
+        return MM_PRESETS.get(lang, MM_PRESETS["zh"])[0]["voice_id"]
     return PRESETS[0]["voice_id"] if PRESETS else ""
 
 
 async def model_for(deps, account: UUID, settings) -> str:
-    """语音条用哪个模型（11-07）：自带 key 的听 TA 选的；花我们额度的固定默认那个（别的模型价钱我们没算过）。"""
-    if not settings.voice_model:
+    """语音条用哪个模型（11-07）：自带 key 的听 TA 选的；花我们额度的固定默认那个（别的模型价钱我们没算过）。
+    MiniMax 只有自带 key，选了哪个就是哪个。"""
+    if provider_of(settings) == "minimax":
+        return settings.mm_voice_model if is_minimax(settings.mm_voice_model) else MM_NOTE_MODEL
+    if not settings.voice_model or is_minimax(settings.voice_model):
         return NOTE_MODEL
     box = getattr(deps.keys, "box", None)
     own = await auth.voice_key(deps.pool, box, account) if box is not None else None
@@ -160,8 +252,15 @@ async def quota(pool, account: UUID) -> int:
     return left
 
 
-async def engine(deps, account: UUID) -> tuple[object, bool]:
-    """（接头, 是不是自带 key）。都没有 → VoiceError("no_key")。"""
+async def engine(deps, account: UUID, provider: str = "elevenlabs") -> tuple[object, bool]:
+    """（接头, 是不是自带 key）。都没有 → VoiceError("no_key")。MiniMax 只有自带 key（11-08）。"""
+    if provider == "minimax":
+        box = getattr(deps.keys, "box", None)
+        got = await auth.voice_key_full(deps.pool, box, account, "minimax") if box is not None else None
+        if not got:
+            raise VoiceError("no_key")
+        make = getattr(deps, "minimax_for", None) or MiniMax
+        return make(got[0], got[1] or MM_HOSTS["intl"]), True
     if deps.tts_for is None:
         raise VoiceError("no_key")
     box = getattr(deps.keys, "box", None)
@@ -171,6 +270,18 @@ async def engine(deps, account: UUID) -> tuple[object, bool]:
     if deps.tts_key:
         return deps.tts_for(deps.tts_key), False
     raise VoiceError("no_key")
+
+
+async def listen_engine(deps, account: UUID, prefer: str = "elevenlabs") -> tuple[object, bool, str]:
+    """收语音 / 电话里听（转文字）：先用这个 TA 那家的 key，没有就用另一家的。（接头, 是不是自带 key, 哪家）"""
+    last = VoiceError("no_key")
+    for p in [prefer] + [x for x in PROVIDERS if x != prefer]:
+        try:
+            tts, own = await engine(deps, account, p)
+            return tts, own, p
+        except VoiceError as e:
+            last = e
+    raise last
 
 
 def _duration_ms(mp3: bytes) -> int:
@@ -184,9 +295,9 @@ async def find(pool, account: UUID, fp: str) -> Clip | None:
 
 
 async def speak(deps, account: UUID, *, text: str, voice_id: str, purpose: str, message_id: int | None = None,
-                prev: str | None = None, nxt: str | None = None, model: str = NOTE_MODEL) -> Clip:
+                prev: str | None = None, nxt: str | None = None, model: str = NOTE_MODEL, provider: str = "elevenlabs") -> Clip:
     text = (text or "").strip()
-    voice_id = voice_id or default_voice()
+    voice_id = voice_id or default_voice(provider)
     if not voice_id:
         raise VoiceError("no_voice")
     pool = deps.pool
@@ -200,7 +311,7 @@ async def speak(deps, account: UUID, *, text: str, voice_id: str, purpose: str, 
     hit = await find(pool, account, fp)
     if hit is not None:
         return hit
-    tts, own = await engine(deps, account)
+    tts, own = await engine(deps, account, provider)
     chars = len(text)                                  # 垫的标签也算字（ElevenLabs 照算）
     if not own and await quota(pool, account) < chars:
         raise VoiceError("quota")

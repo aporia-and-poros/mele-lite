@@ -51,6 +51,47 @@ enum CallVoice {
         try await pump(req, cont: cont)
     }
 
+    /// MiniMax（11-08）：同一个合成接口 stream=true，SSE 一行一个 data: {…}，音频是 24k 16 位 PCM 的 hex。
+    /// 「快」= speech-2.8-turbo；「有表情」= 语音条那个模型。稿子都过一遍（[标签] 去掉）
+    static func minimax(_ text: String, client: MiniMax, voiceID: String, kind: Kind, expressiveModel: String) -> AsyncThrowingStream<AVAudioPCMBuffer, Error> {
+        AsyncThrowingStream { cont in
+            let job = Task {
+                let model = kind == .expressive ? expressiveModel : MiniMax.fastModel
+                do {
+                    let req = try client.request("/v1/t2a_v2", json: client.ttsBody(LocalVoice.script(text, model: model), voiceID: voiceID,
+                                                                                     model: model, stream: true))
+                    let bytes: URLSession.AsyncBytes, resp: URLResponse
+                    do { (bytes, resp) = try await URLSession.shared.bytes(for: req) } catch { throw LocalVoice.Fail(kind: "network") }
+                    let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+                    if status >= 400 { throw LocalVoice.Fail(kind: [401, 403].contains(status) ? "auth" : status == 429 ? "quota" : "server") }
+                    var pending = Data(), want = 4_800
+                    do {
+                        for try await raw in bytes.lines {
+                            var line = raw.trimmingCharacters(in: .whitespaces)
+                            if line.hasPrefix("data:") { line = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces) }
+                            guard line.hasPrefix("{"), let d = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else { continue }
+                            try MiniMax.check(d)
+                            pending.append(MiniMax.hex((d["data"] as? [String: Any])?["audio"] as? String ?? ""))
+                            if pending.count >= want {
+                                let cut = pending.count - pending.count % 2
+                                cont.yield(pcm16(pending.prefix(cut)))
+                                pending = Data(pending.dropFirst(cut))
+                                want = 9_600
+                            }
+                        }
+                    } catch is CancellationError { cont.finish(); return }
+                    catch let f as LocalVoice.Fail { throw f }
+                    catch { throw LocalVoice.Fail(kind: "network") }
+                    if pending.count >= 2 { cont.yield(pcm16(pending.prefix(pending.count - pending.count % 2))) }
+                    cont.finish()
+                } catch {
+                    cont.finish(throwing: error)
+                }
+            }
+            cont.onTermination = { _ in job.cancel() }
+        }
+    }
+
     /// 连着 Host（10-31）：Host 转来的 24k PCM 流，照样切块
     static func pcm(_ req: URLRequest) -> AsyncThrowingStream<AVAudioPCMBuffer, Error> {
         AsyncThrowingStream { cont in
@@ -166,12 +207,14 @@ final class CallSystemVoice: @unchecked Sendable {
     }
 }
 
-/// 说完那一句的准确转写（10-31）：有 ElevenLabs key 用 Scribe（同一把，不用多填），否则 OpenAI 的转写，都没有就用手机识别的。
+/// 说完那一句的准确转写（10-31）：有 ElevenLabs key 用 Scribe（同一把，不用多填），有 MiniMax key 用它的转写（11-08），
+/// 否则 OpenAI 的转写，都没有就用手机识别的。
 enum CallHearing {
-    enum Route { case scribe(String), openai(String) }
+    enum Route { case scribe(String), minimax(MiniMax), openai(String) }
 
     static func route(_ host: LocalHost) -> Route? {
         if let k = LocalVoice.key(host) { return .scribe(k) }
+        if let m = LocalVoice.minimax(host) { return .minimax(m) }
         for k in host.keys where (k["provider"] as? String) == "openai" {
             let base = (k["base_url"] as? String ?? "").trimmingCharacters(in: .whitespaces)
             guard base.isEmpty || base.contains("api.openai.com"), let id = k["id"] as? String, let secret = host.vault.get(id) else { continue }
@@ -189,6 +232,8 @@ enum CallHearing {
                 let d = try await ElevenLabs(key: key).request("POST", "/v1/speech-to-text",
                                                                multipart: (["model_id": "scribe_v2", "tag_audio_events": "false"], aac))
                 text = (try? JSONSerialization.jsonObject(with: d) as? [String: Any])?["text"] as? String ?? ""
+            case .minimax(let m):
+                text = try await m.transcribe(aac).text
             case .openai(let key):
                 text = try await openAI(aac, key: key)
             }

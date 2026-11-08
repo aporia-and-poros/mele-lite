@@ -13,6 +13,7 @@ ODD = frozenset({"dedupe", "food", "caption", "import", "music", "translate"})
 _SEES = frozenset({"vision", "caption"})                                 # 要会看图
 _NOT = {
     "elevenlabs": frozenset(CHORES) - {"voice"},
+    "minimax": frozenset(CHORES) - {"voice"},           # 声音（11-08）：跟 ElevenLabs 一样只管声音
     "deepseek": _SEES | {"draw", "voice"},
     "anthropic": frozenset({"draw", "voice"}),
 }

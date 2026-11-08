@@ -745,8 +745,8 @@ final class LocalBrain: @unchecked Sendable {
         if !whereNow.isEmpty { req.context += "\n\n" + whereNow }
         // 记忆库（用户接的 MCP，10-04）：新对话先 wake，每轮拿刚说的 recall；无痕、小号不碰（记的是平常的你）
         let incognito = (host.store.conversation(conv)?["incognito"] as? Bool ?? false) || altInfo != nil
-        // 声音（10-04）：有自己的 ElevenLabs key、没关、不是无痕，才告诉它可以发语音条
-        let voiceOn = call == nil && !(host.store.conversation(conv)?["incognito"] as? Bool ?? false) && LocalVoice.key(host) != nil
+        // 声音（10-04）：它用的那家（ElevenLabs / MiniMax）有自己的 key、没关、不是无痕，才告诉它可以发语音条
+        let voiceOn = call == nil && !(host.store.conversation(conv)?["incognito"] as? Bool ?? false) && LocalVoice.hasKey(host, settings)
             && (settings["voice_mode"] as? String ?? "sometimes") != "off"
         let voiceLines = LocalVoice.modeLines(settings, hasKey: voiceOn, zh: zh)
         if !voiceLines.isEmpty { req.system += "\n\n" + voiceLines }

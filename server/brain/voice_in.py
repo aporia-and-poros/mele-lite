@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
 
-from llm.tts import STT_MODEL, TTSError
+from llm.tts import MM_STT_MODEL, STT_MODEL, TTSError
 
 from . import attachments as files
 from . import voice as V
@@ -131,14 +131,15 @@ async def _remember(pool, account: UUID, m: Measure) -> None:
 
 
 async def receive(deps, account: UUID, conversation: UUID, audio: bytes, mime: str, seconds_hint: float,
-                  lang: str) -> tuple[files.Attachment, str]:
-    """存录音、转文字、量语气。返回 (附件, 正文)。额度不够 / 没钥匙 → VoiceError。"""
+                  lang: str, provider: str = "elevenlabs") -> tuple[files.Attachment, str]:
+    """存录音、转文字、量语气。返回 (附件, 正文)。额度不够 / 没钥匙 → VoiceError。
+    转文字先用这个 TA 那家的 key（11-08 MiniMax 也能转），没有就用另一家的。"""
     if not audio:
         raise V.VoiceError("bad_request")
     if len(audio) > MAX_BYTES or seconds_hint > MAX_SECONDS + 5:
         raise V.VoiceError("too_long")
     pool = deps.pool
-    tts, own = await V.engine(deps, account)
+    tts, own, used = await V.listen_engine(deps, account, provider)
     charge = max(1, round(seconds_hint))
     if not own and await V.quota(pool, account) < charge:
         raise V.VoiceError("quota")
@@ -166,7 +167,7 @@ async def receive(deps, account: UUID, conversation: UUID, audio: bytes, mime: s
             await con.execute("UPDATE voice_quota SET chars_left = GREATEST(chars_left - $2, 0) WHERE account_id = $1",
                               account, secs)
         await con.execute("INSERT INTO voice_usage (account_id, purpose, model, chars, cost_usd, own_key) "
-                          "VALUES ($1, 'listen', $2, $3, $4, $5)", account, STT_MODEL, secs, secs / 3600 * STT_PER_HOUR, own)
+                          "VALUES ($1, 'listen', $2, $3, $4, $5)", account, MM_STT_MODEL if used == "minimax" else STT_MODEL, secs, secs / 3600 * STT_PER_HOUR, own)
         r = await con.fetchrow(
             f"""INSERT INTO attachments (id, account_id, conversation_id, kind, name, mime, size, path, text, caption, sha)
                 VALUES ($1, $2, $3, 'voice', $10, $4, $5, $6, $7, $8, $9) RETURNING {files._COLS}""",

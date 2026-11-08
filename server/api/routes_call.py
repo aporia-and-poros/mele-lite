@@ -31,7 +31,7 @@ from .deps import Api, account, api, own_conversation
 router = APIRouter()
 log = logging.getLogger(__name__)
 
-FAST_MODEL = "eleven_flash_v2_5"
+FAST_MODEL = "eleven_flash_v2_5"          # ElevenLabs 的「快」；MiniMax 的在 brain/voice.fast_model
 ACTIVE: dict[str, CallCtx] = {}            # 通话编号 → 正在跑 / 刚跑完的那一轮（打断、改字要找它）
 TASKS: dict[str, asyncio.Task] = {}        # 通话编号 → 那一轮的任务（挂断时等它收完，纸条排在后面）
 
@@ -59,24 +59,31 @@ async def info(conv: UUID, acc: UUID = Depends(account), a: Api = Depends(api)):
     """接通前问一声：Host 能不能替手机听（Scribe）、能不能出声（ElevenLabs），TA 用哪把嗓子、哪种电话声音"""
     scope = await _scope(a, acc, conv)
     settings = Settings.from_dict(await archive.get_settings(a.deps.pool, scope.companion))
+    p = V.provider_of(settings)
     try:
-        await V.engine(a.deps, acc)
-        has = True
+        await V.engine(a.deps, acc, p)
+        voice = True
     except V.VoiceError:
-        has = False
-    return {"hear": has, "voice": has, "call_voice": settings.call_voice, "lang": settings.lang,
-            "voice_id": settings.voice_id or V.default_voice()}
+        voice = False
+    try:
+        await V.listen_engine(a.deps, acc, p)
+        hear = True
+    except V.VoiceError:
+        hear = False
+    return {"hear": hear, "voice": voice, "call_voice": settings.call_voice, "lang": settings.lang,
+            "voice_id": V.voice_id_of(settings), "provider": p}
 
 
 @router.post("/conversations/{conv}/call/hear")
 async def hear(conv: UUID, audio: UploadFile = File(...), acc: UUID = Depends(account), a: Api = Depends(api)):
     """说完那一句的准确转写。转不出来给空字符串，手机就用它自己识别的那句。"""
-    await _scope(a, acc, conv)
+    scope = await _scope(a, acc, conv)
     data = await audio.read()
     if not data or len(data) > 4 * 1024 * 1024:
         raise HTTPException(400, "这段录音不对")
+    settings = Settings.from_dict(await archive.get_settings(a.deps.pool, scope.companion))
     try:
-        tts, _own = await V.engine(a.deps, acc)
+        tts, _own, _p = await V.listen_engine(a.deps, acc, V.provider_of(settings))
         got = await tts.transcribe(data, audio.content_type or "audio/mp4", name="call.m4a")
     except (V.VoiceError, TTSError) as e:
         log.info("call hear failed: %s", getattr(e, "kind", e))
@@ -191,16 +198,18 @@ async def tts(conv: UUID, body: dict = Body(...), acc: UUID = Depends(account), 
     if not text:
         raise HTTPException(400, "这句是空的")
     settings = Settings.from_dict(await archive.get_settings(a.deps.pool, scope.companion))
+    p = V.provider_of(settings)
     try:
-        engine, own = await V.engine(a.deps, acc)
+        engine, own = await V.engine(a.deps, acc, p)
     except V.VoiceError as e:
         raise HTTPException(403, e.kind) from None
     if not own and await V.quota(a.deps.pool, acc) < len(text):
         raise HTTPException(402, "quota")
     expressive = (body.get("kind") or settings.call_voice) == "expressive"
-    model = await V.model_for(a.deps, acc, settings) if expressive else FAST_MODEL
-    said = V.script(text, model) if expressive else text
-    voice_id = settings.voice_id or V.default_voice()
+    model = await V.model_for(a.deps, acc, settings) if expressive else V.fast_model(p)
+    # 「快」那档 ElevenLabs 照原样念；MiniMax 也得过一遍稿子（[标签] 去掉）
+    said = V.script(text, model) if expressive or p == "minimax" else text
+    voice_id = V.voice_id_of(settings)
     chunks = engine.stream_pcm(said, voice_id, model, previous_text=str(body.get("prev") or "") or None)
     try:
         first = await chunks.__anext__()          # 第一块先拿到：出错能回正经的状态码，不是半截流

@@ -167,6 +167,11 @@ final class LocalHost: @unchecked Sendable {
             vault.set(nil, for: id)
             return .empty
         }
+        if id == LocalVoice.mmKeyID, LocalVoice.key(self, provider: "minimax") != nil {
+            vault.set(nil, for: id)
+            vault.set(nil, for: LocalVoice.mmBaseID)
+            return .empty
+        }
         guard keys.contains(where: { ($0["id"] as? String) == id }) else { return .error(404, String(localized: "没有这把钥匙")) }
         store.write("keys.json", keys.filter { ($0["id"] as? String) != id })
         vault.set(nil, for: id)
@@ -229,6 +234,7 @@ final class LocalHost: @unchecked Sendable {
         "relationship": "", "cache_keepalive": false, "diary_on": true, "offline_life": false, "talk_rules": "", "diary_chars": 600, "voice_mode": "sometimes",
         "full_handbook": true,      // Lite 说明书开关（10-08 Aporia：默认开）
         "voice_id": "", "voice_name": "", "voice_model": "",
+        "voice_provider": "elevenlabs", "mm_voice_id": "", "mm_voice_name": "", "mm_voice_model": "",   // 声音用哪家（11-08）
         "memory_server": LocalMemory.serverID,   // 新联系人默认接本地记忆库（10-11 第 20 版）
     ]
 
@@ -476,7 +482,7 @@ final class LocalHost: @unchecked Sendable {
             LocalVoice.isVoice(b) ? (clips[LocalVoice.sha(LocalVoice.body(b))] ?? NSNull()) : NSNull()
         }
         // 还没念的（10-31 按需念）：并排一列 lazy_voices，App 画成语音条、点了才念；没 key 了就还是文字
-        let canSpeak = role == "assistant" && LocalVoice.key(self) != nil
+        let canSpeak = role == "assistant" && LocalVoice.hasKey(self, settings)
         let lazy: [Any] = bubbles.map { b in
             canSpeak && LocalVoice.isVoice(b) && clips[LocalVoice.sha(LocalVoice.body(b))] == nil ? LocalVoice.lazyRef(b) as Any : NSNull()
         }

@@ -162,22 +162,36 @@ async def add_key(pool, box: KeyBox, account: UUID, *, provider: str, api_key: s
     return kid
 
 
-async def add_voice_key(pool, box: KeyBox, account: UUID, api_key: str) -> UUID:
-    """ElevenLabs 的 key（10-03 声音）：不是聊天模型，不过模型检查、不改套餐；一个账号只留一把（新的顶掉旧的）。"""
+VOICE_PROVIDERS = ("elevenlabs", "minimax")      # 只管声音的钥匙（不聊天、不过模型检查、一家只留一把）
+_NOT_VOICE = "provider NOT IN ('elevenlabs', 'minimax')"
+
+
+async def add_voice_key(pool, box: KeyBox, account: UUID, api_key: str, provider: str = "elevenlabs",
+                        base_url: str | None = None) -> UUID:
+    """声音的 key（10-03 ElevenLabs；11-08 加 MiniMax，base_url 记它是国内版还是国际版的地址）：
+    不是聊天模型，不过模型检查、不改套餐；一家一个账号只留一把（新的顶掉旧的）。"""
+    if provider not in VOICE_PROVIDERS:
+        raise AuthError("不认得这家")
     api_key = (api_key or "").strip()
     if len(api_key) < 8:
         raise AuthError("这个 key 太短了，是不是没贴全")
     kid = uuid.uuid4()
     async with pool.acquire() as con, con.transaction():
-        await con.execute("DELETE FROM keyring WHERE account_id = $1 AND provider = 'elevenlabs'", account)
+        await con.execute("DELETE FROM keyring WHERE account_id = $1 AND provider = $2", account, provider)
         await con.execute("INSERT INTO keyring (id, account_id, provider, chat_model, base_url, secret, last4) "
-                          "VALUES ($1, $2, 'elevenlabs', '', NULL, $3, $4)", kid, account, box.lock(api_key), api_key[-4:])
+                          "VALUES ($1, $2, $3, '', $4, $5, $6)", kid, account, provider, base_url, box.lock(api_key), api_key[-4:])
     return kid
 
 
-async def voice_key(pool, box: KeyBox, account: UUID) -> str | None:
-    row = await pool.fetchrow("SELECT secret FROM keyring WHERE account_id = $1 AND provider = 'elevenlabs'", account)
-    return box.unlock(row["secret"]) if row else None
+async def voice_key(pool, box: KeyBox, account: UUID, provider: str = "elevenlabs") -> str | None:
+    got = await voice_key_full(pool, box, account, provider)
+    return got[0] if got else None
+
+
+async def voice_key_full(pool, box: KeyBox, account: UUID, provider: str = "elevenlabs") -> tuple[str, str | None] | None:
+    """（key，接口地址）。ElevenLabs 的地址是空的。"""
+    row = await pool.fetchrow("SELECT secret, base_url FROM keyring WHERE account_id = $1 AND provider = $2", account, provider)
+    return (box.unlock(row["secret"]), row["base_url"]) if row else None
 
 
 async def list_keys(pool, account: UUID) -> list[KeyInfo]:
@@ -195,7 +209,7 @@ async def set_ledger_model(pool, account: UUID, key_id: UUID, ledger_model: str 
     """改一把钥匙的后台模型（不用删了重加，联系人绑着的钥匙不动）；空 = 回到照清单。
     不试打：写账失败本来就会换聊天那个模型兜底，填错了只是多花点，不会卡住。"""
     done = await pool.execute("UPDATE keyring SET ledger_model = $3 WHERE id = $1 AND account_id = $2 "
-                              "AND provider <> 'elevenlabs'", key_id, account, _model_or_none(ledger_model))
+                              f"AND {_NOT_VOICE}", key_id, account, _model_or_none(ledger_model))
     return done.endswith("1")
 
 
@@ -205,7 +219,7 @@ async def set_chat_model(pool, account: UUID, key_id: UUID, chat_model: str) -> 
     if not chat_model:
         raise AuthError("要填一个聊天用的模型")
     done = await pool.execute("UPDATE keyring SET chat_model = $3 WHERE id = $1 AND account_id = $2 "
-                              "AND provider <> 'elevenlabs'", key_id, account, chat_model)
+                              f"AND {_NOT_VOICE}", key_id, account, chat_model)
     return done.endswith("1")
 
 
@@ -216,7 +230,7 @@ async def delete_key(pool, account: UUID, key_id: UUID) -> bool:
 async def use_key(pool, account: UUID, companion: UUID, key_id: UUID | None) -> None:
     """这个联系人用哪把钥匙（空 = 不用，走试用或提示加 key）。钥匙和联系人都得是这个账号的。"""
     if key_id is not None and not await pool.fetchval(
-            "SELECT 1 FROM keyring WHERE id = $1 AND account_id = $2 AND provider <> 'elevenlabs'", key_id, account):
+            f"SELECT 1 FROM keyring WHERE id = $1 AND account_id = $2 AND {_NOT_VOICE}", key_id, account):
         raise AuthError("没有这把钥匙")
     done = await pool.execute("UPDATE companions SET key_id = $3 WHERE id = $1 AND account_id = $2",
                               companion, account, key_id)

@@ -156,8 +156,8 @@ async def put_media_direct(slot: str, body: dict | None = Body(default=None), ac
 def _key(k: auth.KeyInfo, table: dict | None = None) -> dict:
     t = (table or {}).get("chores", {})
     mine = [c for c in CH.CHORES if t.get(c) == str(k.id)]
-    if k.provider == "elevenlabs":
-        mine = ["voice"]                                   # 一个账号只有一把 ElevenLabs，声音就是它
+    if k.provider in auth.VOICE_PROVIDERS:
+        mine = ["voice"]                                   # 一个账号一家只有一把声音 key（ElevenLabs / MiniMax），声音就是它
     return {"id": str(k.id), "provider": k.provider, "chat_model": k.chat_model, "base_url": k.base_url,
             "last4": k.last4, "ledger_model": k.ledger_model, "chores": mine, "can": CH.can(k.provider),
             "draw_model": (table or {}).get("draw_model", "") if "draw" in mine else ""}
@@ -198,13 +198,13 @@ async def patch_key(key_id: UUID, body: dict = Body(...), acc: UUID = Depends(ac
         raise HTTPException(404, "没有这把钥匙")
     if "ledger_model" in body:
         await auth.set_ledger_model(pool, acc, key_id, str(body.get("ledger_model") or ""))
-    if "chat_model" in body and k.provider != "elevenlabs":
+    if "chat_model" in body and k.provider not in auth.VOICE_PROVIDERS:
         try:
             await auth.set_chat_model(pool, acc, key_id, str(body.get("chat_model") or ""))
         except auth.AuthError as e:
             raise _bad(e) from e
     table, moved = await CH.get_table(pool, acc), []
-    if "chores" in body and k.provider != "elevenlabs":
+    if "chores" in body and k.provider not in auth.VOICE_PROVIDERS:
         try:
             table["chores"], moved = CH.assign(table["chores"], str(key_id), k.provider, [str(c) for c in body["chores"] or []])
         except ValueError as e:

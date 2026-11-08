@@ -804,7 +804,7 @@ struct CompanionSettingsView: View {
         Tile {
             RowPicker(selection: Binding(get: { store.keyID }, set: { v in Task { await store.useKey(v) } })) {
                 Text(Lite.on ? "还没选" : "免费额度").tag(String?.none)
-                ForEach(store.keys.filter { $0.provider != "elevenlabs" }) { k in
+                ForEach(store.keys.filter { !KeychainCard.voiceOnly($0.provider) }) { k in
                     Text("\(k.chatModel) ··\(k.last4)").tag(String?.some(k.id))
                 }
             } label: { row("用哪把钥匙", "也就是用哪个模型。钥匙在「Me」里加") }

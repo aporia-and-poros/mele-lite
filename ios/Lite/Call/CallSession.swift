@@ -120,7 +120,7 @@ final class CallSession: ObservableObject {
         }
         await backend.prepare()
         if !speechOK && !backend.canHear {
-            notice = String(localized: "听不见你说什么：打开语音识别（设置 → Mele Lite → 语音识别），或者在钥匙串里加 ElevenLabs / OpenAI 的 key")
+            notice = String(localized: "听不见你说什么：打开语音识别（设置 → Mele Lite → 语音识别），或者在钥匙串里加 ElevenLabs / MiniMax / OpenAI 的 key")
             return
         }
         audio.recognizer = SFSpeechRecognizer(locale: Locale(identifier: zh ? "zh-CN" : "en-US"))
@@ -144,8 +144,8 @@ final class CallSession: ObservableObject {
         if voiceKind == .system { system.warmUp(zh: zh) }
         if voiceKind != .system && !backend.canSpeak {
             textOnly = true
-            notice = Lite.hosted ? String(localized: "Host 上还没有 ElevenLabs key，TA 的话只出字幕。想听声音：TA 的设定 → 声音 → 电话里的声音，选「iPhone 自带」")
-                                 : String(localized: "还没填 ElevenLabs key，TA 的话只出字幕。想听声音：TA 的设定 → 声音 → 电话里的声音，选「iPhone 自带」")
+            notice = Lite.hosted ? String(localized: "Host 上还没有 TA 用的那家声音 key（ElevenLabs / MiniMax），TA 的话只出字幕。想听声音：TA 的设定 → 声音 → 电话里的声音，选「iPhone 自带」")
+                                 : String(localized: "还没填 TA 用的那家声音 key（ElevenLabs / MiniMax），TA 的话只出字幕。想听声音：TA 的设定 → 声音 → 电话里的声音，选「iPhone 自带」")
         }
         // 来电、闹钟打断了音频：这通就算挂了
         observers.append(NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] n in
@@ -505,6 +505,7 @@ extension CallHearing.Route {
     var label: String {
         switch self {
         case .scribe: "Scribe"
+        case .minimax: "MiniMax"
         case .openai: "OpenAI"
         }
     }

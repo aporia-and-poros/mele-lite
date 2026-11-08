@@ -109,6 +109,7 @@ class Deps:
     ears: object = None          # music.ears.Transport：Lumi 的耳朵（下载 / 解码 / 量 / 歌词 / Gemini）；None = 不去听（测试默认）
     tts_for: Callable[[str], object] | None = None   # 声音（10-03）：给一把 ElevenLabs key 返回接头；None = 没有声音
     tts_key: str = ""            # 我们的 ElevenLabs key（NEWAPP_ELEVENLABS_KEY）；空 = 只有自带 key 的人能用
+    minimax_for: Callable[[str, str], object] | None = None   # MiniMax（11-08）：给 (key, 接口地址) 返回接头；None = 真的 llm.tts.MiniMax
     files_dir: Path | None = None   # 语音存哪（接口启动时填 ApiConfig.files_dir）
     ringer: object = None        # TA 打给你（10-31，brain/call_ring.Ringer）：接口启动时填；None = 没有打电话工具
 
@@ -666,7 +667,7 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
                            others=list(group.others)) + "\n\n" if group is not None else "") + render_base(persona, core, lang,
                          monologue="\n\n".join(x for x in (mono_rules, inner_voice.rules(settings) if settings.inner_voice else "") if x),
                          tone=([] if settings.bare_mode else tone_lines(lang, settings.warmth, settings.initiative, settings.humor))
-                         + ([] if scope.incognito else voice.mode_lines(lang, settings.voice_mode)),
+                         + ([] if scope.incognito else voice.mode_lines(lang, settings.voice_mode, settings)),
                          relationship=settings.relationship,
                          lore="\n\n".join(x for x in (lore.always_block(lore_all, lang), ST.menu_block(sticker_lib, lang)) if x),
                          chat_rules=not settings.long_mode,
@@ -804,7 +805,7 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
         # 语音条（10-31 起按需念）：先落一个占位的语音条，TA 点了才合成（/messages/{mid}/speak，念过的挂在消息上）；
         # 不发档 / 无痕 / 没钥匙 / 额度不够 → 当文字发，存档里那段也改成文字
         speakable = (settings.voice_mode != "off" and not scope.incognito
-                     and await _safe(voice.can_speak(deps, acc, len(voice.body(bubble))), False))
+                     and await _safe(voice.can_speak(deps, acc, len(voice.body(bubble)), voice.provider_of(settings)), False))
         if not speakable:
             out.text = out.text.replace(bubble, voice.as_text(bubble), 1)
             await emit({"type": "bubble", "text": voice.as_text(bubble), **tr(i)})

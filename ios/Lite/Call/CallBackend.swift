@@ -10,7 +10,7 @@ protocol CallBackend: AnyObject {
     var voiceKind: CallVoice.Kind { get }
     /// 有没有准确转写（没有就只用手机识别的字）
     var canHear: Bool { get }
-    /// 有没有 ElevenLabs 那种声音（没有就只出字幕，除非选了 iPhone 自带）
+    /// 有没有 ElevenLabs / MiniMax 那种声音（没有就只出字幕，除非选了 iPhone 自带）
     var canSpeak: Bool { get }
     /// 计时那行里写的：Scribe / OpenAI / Host
     var hearLabel: String { get }
@@ -41,6 +41,7 @@ final class LocalCallBackend: CallBackend {
     let voiceKind: CallVoice.Kind
     private let voiceID: String
     private let voiceModel: String
+    private let provider: String
 
     init(conversation: String) {
         conv = conversation
@@ -49,10 +50,11 @@ final class LocalCallBackend: CallBackend {
         voiceKind = CallVoice.kind(settings)
         voiceID = LocalVoice.voiceID(settings)
         voiceModel = LocalVoice.model(settings)
+        provider = LocalVoice.provider(settings)
     }
 
     var canHear: Bool { CallHearing.route(host) != nil }
-    var canSpeak: Bool { LocalVoice.key(host) != nil }
+    var canSpeak: Bool { LocalVoice.key(host, provider: provider) != nil }
     var hearLabel: String { CallHearing.route(host)?.label ?? "手机识别" }
     func prepare() async {}
 
@@ -62,6 +64,10 @@ final class LocalCallBackend: CallBackend {
     }
 
     func voice(_ line: String, prev: String?, callID: String) -> AsyncThrowingStream<AVAudioPCMBuffer, Error> {
+        if provider == "minimax" {
+            guard let m = LocalVoice.minimax(host) else { return AsyncThrowingStream { $0.finish() } }
+            return CallVoice.minimax(line, client: m, voiceID: voiceID, kind: voiceKind, expressiveModel: voiceModel)
+        }
         guard let k = LocalVoice.key(host) else { return AsyncThrowingStream { $0.finish() } }
         return CallVoice.eleven(line, key: k, voiceID: voiceID, kind: voiceKind, expressiveModel: voiceModel, prev: prev)
     }
