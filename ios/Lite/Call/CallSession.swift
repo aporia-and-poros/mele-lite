@@ -319,6 +319,7 @@ final class CallSession: ObservableObject {
 
     private func runTA(timing t: Timing, _ go: @escaping (CallLink) async -> Void) {
         if ta != .listening { bargeIn() }
+        clips = []          // 一轮一张单子：打断时报「这一轮念到了哪几句」，留着上几轮的会把之前说过的全存进这一轮（11-08 内测：通话记录里 TA 的话整段又来一遍）
         turnSeq += 1
         let seq = turnSeq
         let l = CallLink(callID: callID, onLine: { [weak self] line in self?.onMain { self?.gotLine(line, seq: seq) } },
