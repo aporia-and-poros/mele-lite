@@ -36,6 +36,6 @@ def pick_samples(lines: list[str], limit: int = 6, min_chars: int = 8) -> list[s
 
 
 def drop_repeated(bubbles: list[str], recent: list[str], threshold: float = 0.75) -> list[str]:
-    """回话里跟它最近说过的几乎一样（≥ threshold）的气泡丢掉；全丢光了留第一句"""
-    kept = [b for b in bubbles if not any(similarity(r, b) >= threshold for r in recent)]
+    """回话里跟它最近说过的几乎一样（≥ threshold）的气泡丢掉；全丢光了留第一句。语音条不丢（11-09：短语音跟不相干的长话也算像，被悄悄吞掉）"""
+    kept = [b for b in bubbles if b.lstrip().startswith("🎤") or not any(similarity(r, b) >= threshold for r in recent)]
     return kept or bubbles[:1]

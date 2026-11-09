@@ -38,7 +38,8 @@ public enum Repeats {
 
     /// 回话里的气泡跟它最近说过的几乎一样（≥ threshold）就丢；全丢光了留第一句（总得回点什么）
     public static func dropRepeated(_ bubbles: [String], recent: [String], threshold: Double = 0.75) -> [String] {
-        let kept = bubbles.filter { b in !recent.contains { similarity($0, b) >= threshold } }
+        // 语音条不丢（11-09：短语音跟不相干的长话也算像，被悄悄吞掉）
+        let kept = bubbles.filter { b in b.hasPrefix(Bubbles.voice) || !recent.contains { similarity($0, b) >= threshold } }
         return kept.isEmpty ? Array(bubbles.prefix(1)) : kept
     }
 
@@ -46,7 +47,7 @@ public enum Repeats {
     /// 两段拼在一起发出去。后面的气泡跟这条回话里前面已经留下的几乎一样（≥ threshold）就丢，第一次说的留着
     public static func dropEchoes(_ bubbles: [String], threshold: Double = 0.75) -> [String] {
         var kept: [String] = []
-        for b in bubbles where !kept.contains(where: { similarity($0, b) >= threshold }) { kept.append(b) }
+        for b in bubbles where b.hasPrefix(Bubbles.voice) || !kept.contains(where: { similarity($0, b) >= threshold }) { kept.append(b) }
         return kept
     }
 }

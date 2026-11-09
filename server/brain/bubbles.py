@@ -90,6 +90,20 @@ def balance(chunks: list[str], cap: int | None) -> list[str]:
 VOICE = "🎤"
 
 
+_SENT_END = "。！？!?…—～~：:."
+_AUDIO_TAG = r"\[[^\[\]\n:：]{1,60}\]"     # 带冒号的是 [表情包：…] 这类标记，不是语气标签
+_TAG_THEN_MARK = re.compile(f"(?:^|(?<=[{_SENT_END}]))[ \\t]*((?:{_AUDIO_TAG}[ \\t]*)*{_AUDIO_TAG})[ \\t]*{VOICE}[ \\t]*", re.M)
+_BEFORE_MARK = re.compile(f"(?<=[{_SENT_END}])[ \\t]*{VOICE}|(?<=[^\\n])\\n[ \\t]*{VOICE}")
+
+
+def tidy_voice(text: str) -> str:
+    """🎤 写歪了也认（11-09 内测：前面多一句话或一个语气标签，整段就成了普通文字，还没提示）：
+    [标签] 🎤 → 🎤 [标签]；跟在句末 / 换行后面的 🎤 另起一段。句子中间提到 🎤、代码块里的不动。"""
+    if VOICE not in text or "```" in text:
+        return text
+    return _BEFORE_MARK.sub(f"\n\n{VOICE}", _TAG_THEN_MARK.sub(f"{VOICE} \\1 ", text))
+
+
 def split_reply(text: str, cap: int | None = 6, long_mode: bool = False) -> list[str]:
     paras: list[str] = []
     for p in re.split(r"(\n\s*\n)", text or ""):

@@ -81,6 +81,43 @@ public enum Bubbles {
 
     static let tagOnly = try! NSRegularExpression(pattern: #"^\s*<(\w+)[^>]*>[^<]*</\1>\s*$"#)
 
+    static let voice = "🎤"
+    private static let sentEnd = "。！？!?…—～~：:."
+    private static let audioTag = #"\[[^\[\]\n:：]{1,60}\]"#       // 带冒号的是 [表情包：…] 这类标记，不是语气标签
+    private static let tagThenMark = try! NSRegularExpression(pattern: "(?m)(?:^|(?<=[\(sentEnd)]))[ \\t]*((?:\(audioTag)[ \\t]*)*\(audioTag))[ \\t]*\(voice)[ \\t]*")
+    private static let beforeMark = try! NSRegularExpression(pattern: "(?<=[\(sentEnd)])[ \\t]*\(voice)|(?<=[^\\n])\\n[ \\t]*\(voice)")
+
+    /// 🎤 写歪了也认（11-09 内测：前面多一句话或一个语气标签，整段就成了普通文字，还没提示）：
+    /// [标签] 🎤 → 🎤 [标签]；跟在句末 / 换行后面的 🎤 另起一段。句子中间提到 🎤、代码块里的不动。跟服务器 tidy_voice 同一份规则。
+    public static func tidyVoice(_ text: String) -> String {
+        guard text.contains(voice), !text.contains("```") else { return text }
+        func sub(_ re: NSRegularExpression, _ s: String, _ t: String) -> String {
+            re.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: t)
+        }
+        return sub(beforeMark, sub(tagThenMark, text, "\(voice) $1 "), "\n\n\(voice)")
+    }
+
+    private enum Run { case voice(String), text([String]) }
+
+    /// 有语音条时（照服务器 split_reply）：语音条各占一条，文字按连着的几段分组，在剩下的条数里各自合
+    private static func balanceAroundVoice(_ merged: [String], cap: Int?) -> [String] {
+        var runs: [Run] = []
+        for c in merged {
+            if c.hasPrefix(voice) { runs.append(.voice(c)) }
+            else if case .text(let r)? = runs.last { runs[runs.count - 1] = .text(r + [c]) }
+            else { runs.append(.text([c])) }
+        }
+        let textSizes = runs.compactMap { run -> Int? in if case .text(let r) = run { return r.count } else { return nil } }
+        let total = max(textSizes.reduce(0, +), 1)
+        let room = cap.map { max($0 - (runs.count - textSizes.count), textSizes.count) }
+        return runs.flatMap { run -> [String] in
+            switch run {
+            case .voice(let v): return [v]
+            case .text(let r): return balance(r, cap: room.map { max(1, $0 * r.count / total) })
+            }
+        }
+    }
+
     public static func split(_ text: String, cap: Int? = 6, offline: Bool = false) -> [String] {
         // 代码块里的空行不算分段（11-07，照服务器 bubbles.py）
         var paras: [String] = []
@@ -95,19 +132,19 @@ public enum Bubbles {
         var chunks: [String] = []
         for p in paras {
             // 代码、列表切开就乱了
-            let keep = offline || p.count <= longPara || p.contains("```") || p.range(of: #"(?m)^\s*(?:[-*•]|\d+[.、]) "#, options: .regularExpression) != nil
+            let keep = offline || p.count <= longPara || p.hasPrefix(voice) || p.contains("```") || p.range(of: #"(?m)^\s*(?:[-*•]|\d+[.、]) "#, options: .regularExpression) != nil
             chunks.append(contentsOf: keep ? [p] : splitLong(p))
         }
         var merged: [String] = []
         for c in chunks {
             let r = NSRange(c.startIndex..., in: c)
-            if !merged.isEmpty, tagOnly.firstMatch(in: c, range: r) != nil {
+            if let last = merged.last, !last.hasPrefix(voice), tagOnly.firstMatch(in: c, range: r) != nil {
                 merged[merged.count - 1] += " " + c.trimmingCharacters(in: .whitespacesAndNewlines)
             } else {
                 merged.append(c)
             }
         }
-        return balance(merged, cap: cap)
+        return merged.contains { $0.hasPrefix(voice) } ? balanceAroundVoice(merged, cap: cap) : balance(merged, cap: cap)
     }
 
     /// 下一条推出去之前「正在输入」停多久：按字数算，有上限。

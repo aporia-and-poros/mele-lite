@@ -1066,10 +1066,11 @@ final class LocalBrain: @unchecked Sendable {
         // 跟它最近说过的几乎一样的气泡丢掉（10-13 内测：DeepSeek 把腔调样本 / 上一轮原话抄回来，一上午每句都是同一句）
         let recentSaid = stored.filter { ($0["role"] as? String) == "assistant" && (group == nil || ($0["speaker"] as? String) == cidSelf) }
             .suffix(6).flatMap { Bubbles.split($0["text"] as? String ?? "", cap: nil, offline: long) }
-        let split = Bubbles.split(parsed.text, cap: settings["max_bubbles"] as? Int ?? 6, offline: long)
+        let replyText = Bubbles.tidyVoice(parsed.text)
+        let split = Bubbles.split(replyText, cap: settings["max_bubbles"] as? Int ?? 6, offline: long)
         // 同一条里自己跟自己重复的也丢（10-14 内测：调工具前后各说一遍）
         var bubbles = Repeats.dropRepeated(Repeats.dropEchoes(split), recent: recentSaid)
-        var finalText = bubbles.count == split.count ? parsed.text : bubbles.joined(separator: "\n\n")
+        var finalText = bubbles.count == split.count ? replyText : bubbles.joined(separator: "\n\n")
         var trans: [String?] = []
         if LocalBilingual.active(settings, group: group != nil), !bubbles.isEmpty {      // 双语气泡（10-15）：每泡的译文
             if LocalBilingual.selfWrites(settings) {

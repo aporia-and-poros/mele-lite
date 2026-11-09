@@ -30,7 +30,7 @@ from llm.types import ChatRequest, ImagePart, Msg, ToolCall, ToolRound, Usage
 from . import markers, stickers as ST
 from . import archive, attachments as files, books, context_line, diary, drawer, far_dates, focus, hidden, ledger, lore, mcp, media, probe as sentinel, reactions, tarot, vision, voice, wallet
 from .judge import LLMJudge
-from .bubbles import split_reply, typing_delay
+from .bubbles import split_reply, tidy_voice, typing_delay
 from . import chores, repeats
 from . import moments as MO
 from .context import ContextParts, build_request, render_volatile, user_tag
@@ -779,6 +779,7 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
         out.text = G.strip_own_label(out.text, persona.name or "TA")
     if out.thinking.strip():
         await emit({"type": "thinking", "text": out.thinking, "ms": thinking_ms})
+    out.text = tidy_voice(out.text)
     bubbles_out = split_reply(out.text, settings.max_bubbles, settings.long_mode)
     # 跟它最近说过的几乎一样的气泡丢掉（10-13 内测：DeepSeek 把腔调样本 / 上一轮原话抄回来，一上午每句都是同一句）
     recent_said = [b for m in await archive.recent(pool, conv, 8) if m.role == "assistant"
