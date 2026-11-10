@@ -1,6 +1,7 @@
 #if LITE
 import AVFoundation
 import Foundation
+import MeleLiteCore
 
 /// 通话流程里「谁来听、谁来想、谁来说」（10-31）：判断说完、灰字、时间线、插嘴都在手机上（CallSession / CallAudio），
 /// 剩下这几样 Lite 本机和连着 Mele Host 各走各的——本机用手机里的小管家和你填在手机上的钥匙，Host 用服务器和它那边的钥匙。
@@ -84,9 +85,8 @@ final class LocalCallBackend: CallBackend {
     }
 
     func cut(_ link: CallLink, spoken: [String]) {
-        link.cut(spoken: spoken)
-        // 它已经写完存好了、只是还没念完：存档回头改成念到的那几句
-        if let mid = link.assistantMessageID, spoken.count < link.lines.count {
+        // 它已经写完存好了、只是还没念完：存档回头改成念到的那几句。还没存的（或正存着的）由存的那头照 spoken 办
+        if let mid = link.cut(spoken: spoken), spoken.count < link.lines.count {
             host.brain.callTrim(conv, message: mid, spoken: spoken)
         }
     }
@@ -108,6 +108,9 @@ final class HostCallBackend: CallBackend {
     private(set) var canHear = false
     private(set) var canSpeak = false
     let hearLabel = "Host"
+    /// 还在路上的「打断」有几个：下一轮等它们到了再发（11-10）。两个请求各走各的，下一轮先到的话，
+    /// 还没更新的 Host 会把打断算在新的一轮头上——没念出口的那句照存，该说的这句没了
+    private var cutsOnTheWay = 0
 
     init(conversation: String, api: APIClient) {
         conv = conversation
@@ -138,10 +141,12 @@ final class HostCallBackend: CallBackend {
         return CallVoice.pcm(req)
     }
 
-    func turn(_ text: String, link: CallLink) async { await stream(["text": text, "call_id": link.callID], link: link) }
+    func turn(_ text: String, link: CallLink) async {
+        await stream(["text": text, "call_id": link.callID, "turn": link.turnID], link: link)
+    }
 
     func answer(link: CallLink, reason: String) async {
-        await stream(["text": "", "call_id": link.callID, "answered": true, "reason": reason], link: link)
+        await stream(["text": "", "call_id": link.callID, "turn": link.turnID, "answered": true, "reason": reason], link: link)
     }
 
     /// call/turn 的 SSE：Host 切好一句推一句
@@ -151,6 +156,8 @@ final class HostCallBackend: CallBackend {
             return
         }
         req.timeoutInterval = 120
+        // 最多等 3 秒：网不好也不让这一句一直卡着（新版 Host 认轮次编号，谁先到都对）
+        for _ in 0..<150 where cutsOnTheWay > 0 { try? await Task.sleep(for: .milliseconds(20)) }
         do {
             let (bytes, resp) = try await URLSession.shared.bytes(for: req)
             guard ((resp as? HTTPURLResponse)?.statusCode ?? 500) < 400 else {
@@ -171,14 +178,18 @@ final class HostCallBackend: CallBackend {
     }
 
     func fix(_ link: CallLink, text: String) {
-        let api = api, path = "\(base)/call/fix", id = link.callID
-        Task { _ = try? await api.raw("POST", path, json: ["call_id": id, "text": text]) }
+        let api = api, path = "\(base)/call/fix", id = link.callID, turn = link.turnID
+        Task { _ = try? await api.raw("POST", path, json: ["call_id": id, "turn": turn, "text": text]) }
     }
 
     func cut(_ link: CallLink, spoken: [String]) {
         link.cut(spoken: spoken)
-        let api = api, path = "\(base)/call/cut", id = link.callID
-        Task { _ = try? await api.raw("POST", path, json: ["call_id": id, "spoken": spoken]) }
+        let api = api, path = "\(base)/call/cut", id = link.callID, turn = link.turnID
+        cutsOnTheWay += 1
+        Task {
+            _ = try? await api.raw("POST", path, json: ["call_id": id, "turn": turn, "spoken": spoken])
+            self.cutsOnTheWay -= 1
+        }
     }
 
     func end(callID: String, seconds: Int) async {

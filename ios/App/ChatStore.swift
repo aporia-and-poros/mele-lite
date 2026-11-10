@@ -202,6 +202,8 @@ final class ChatStore: ObservableObject {
         var attachments: [AttachmentDTO] = []
     }
     private var echoes: [Echo] = []
+    /// 发出去的话一句一句按顺序递（11-10 内测：攒好 a b c 一起发，到 TA 那边成了 c b a）：上一句到了才发下一句
+    private lazy var line = SendLine<String> { [weak self] clientID in await self?.deliver(clientID: clientID) ?? true }
     /// 这一轮正在推的（思考、卡片、气泡）；done 之后补拉到真身就清掉
     private var live: [ChatItem] = []
     private var liveDone = false
@@ -243,7 +245,7 @@ final class ChatStore: ObservableObject {
         guard anchor == nil else { return }
         Task {
             await catchUp()
-            for echo in echoes { await post(echo) }
+            line.restart(with: echoes.map(\.clientID))
             if !echoes.isEmpty { armWatchdog() }      // stop() 把看门狗也停了
         }
         startStream()
@@ -508,7 +510,7 @@ final class ChatStore: ObservableObject {
                 self.echoes.append(echo)
                 self.typing = true
                 self.rebuild()
-                await self.post(echo)
+                self.line.add(echo.clientID)
                 self.armWatchdog()
             }
             let later = self.afterStaged
@@ -531,15 +533,28 @@ final class ChatStore: ObservableObject {
         typing = true                    // 她一发出去对面就「正在输入」（之前自用的 App那样），不等服务器那十秒
         rebuild()
         ContextReporter.shared.reportMusicNow(onlyPlaying: true)   // 耳朵：在放歌就报一下放到哪（服务器等十秒才回，来得及）
-        // 问到步数 / 睡眠 / 天气这些：先当场重读手机那边，再发（10-13）
-        Task {
-            await ContextReporter.shared.refreshForQuestion(trimmed)
-            await post(echo)
-        }
+        line.add(echo.clientID)
         armWatchdog()
     }
 
-    private func post(_ echo: Echo) async {
+    /// 排到这一句了：发出去。真身已经回来 / 撤回了的不用发
+    private func deliver(clientID: String) async -> Bool {
+        guard let echo = echoes.first(where: { $0.clientID == clientID }) else { return true }
+        if echo.tries == 0, echo.attachments.isEmpty { await refreshBriefly(echo.text) }
+        return await post(echo)
+    }
+
+    /// 问到步数 / 睡眠 / 天气这些：先当场重读手机那边，再发（10-13）。最多等 3 秒：这条线上后面还排着别的话，
+    /// 读得慢（定位、天气要联网）也不让它们一直等；没读完的接着读，服务器「等你说完」那几秒里到了也来得及
+    private func refreshBriefly(_ text: String) async {
+        let (ready, go) = AsyncStream<Void>.makeStream()
+        Task { await ContextReporter.shared.refreshForQuestion(text); go.yield(); go.finish() }
+        Task { try? await Task.sleep(for: .seconds(3)); go.yield(); go.finish() }
+        for await _ in ready { break }
+    }
+
+    @discardableResult
+    private func post(_ echo: Echo) async -> Bool {
         struct Queued: Decodable { let queued: Bool; let reply_wait: Double? }
         do {
             var body: [String: Any] = ["text": echo.text, "client_id": echo.clientID]
@@ -547,8 +562,10 @@ final class ChatStore: ObservableObject {
             let r: Queued = try await api.call("POST", "\(path)/messages", json: body)
             if let wait = r.reply_wait { replyWait = wait }
             errorText = nil
+            return true
         } catch {
             errorText = "没发出去（\(error.localizedDescription)），会自己再试"
+            return false
         }
     }
 
@@ -574,7 +591,7 @@ final class ChatStore: ObservableObject {
         echoes.append(echo)
         typing = true
         rebuild()
-        await post(echo)
+        line.add(echo.clientID)
         armWatchdog()
     }
 
@@ -592,7 +609,7 @@ final class ChatStore: ObservableObject {
             echoes.append(echo)
             typing = true
             rebuild()
-            await post(echo)
+            line.add(echo.clientID)
             armWatchdog()
         } catch {
             errorText = (error as? APIError)?.message ?? "语音没发出去"
@@ -607,7 +624,7 @@ final class ChatStore: ObservableObject {
             echoes.append(echo)
             typing = true
             rebuild()
-            await post(echo)
+            line.add(echo.clientID)
             armWatchdog()
         } catch {
             errorText = "表情包没发出去：\(error.localizedDescription)"
@@ -622,11 +639,13 @@ final class ChatStore: ObservableObject {
                 try? await Task.sleep(for: .seconds(5))
                 let quietSince = max(self.lastEventAt, self.echoes.map(\.sentAt).max() ?? .distantPast)
                 guard Date().timeIntervalSince(quietSince) > self.replyWait + 30 else { continue }
+                var again: [String] = []
                 for i in self.echoes.indices where self.echoes[i].tries < 3 {
                     self.echoes[i].tries += 1
                     self.echoes[i].sentAt = Date()
-                    await self.post(self.echoes[i])
+                    again.append(self.echoes[i].clientID)
                 }
+                self.line.restart(with: again)          // 重发也按原来的顺序，一句到了再发下一句
                 if self.echoes.allSatisfy({ $0.tries >= 3 }) {
                     self.errorText = "服务器一直没回应，检查一下网络"
                     self.typing = false
@@ -759,6 +778,12 @@ final class ChatStore: ObservableObject {
     /// 撤回还在「等你说完」里的那句（10-20）：TA 还没看到，等候区里拿掉就行
     func recallEcho(_ rowID: Int) async {
         guard let echo = echoes.first(where: { $0.id == rowID }) else { return }
+        if line.take(echo.clientID) {          // 还排着没发出去（前面那句还在路上）：本机拿掉就行
+            echoes.removeAll { $0.id == rowID }
+            if echoes.isEmpty && live.isEmpty { typing = false }
+            rebuild()
+            return
+        }
         do {
             let _: [String: Bool?] = try await api.call("POST", "\(path)/recall", json: ["client_id": echo.clientID])
             echoes.removeAll { $0.id == rowID }

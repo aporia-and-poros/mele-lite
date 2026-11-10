@@ -24,6 +24,8 @@ final class CallSession: ObservableObject {
 
     @Published private(set) var phase: Phase = .connecting
     @Published private(set) var ta: TA = .listening
+    /// 你说完了、这一句正在认字（还没轮到 TA 想）。这一两秒通话页不写「在听」——写了像没听见，人会再说一遍（11-10 内测）
+    @Published private(set) var digesting = 0
     @Published private(set) var seconds = 0
     @Published var muted = false { didSet { audio.muted = muted } }
     @Published var speaker = false {
@@ -63,6 +65,11 @@ final class CallSession: ObservableObject {
     private var turnSeq = 0
     private var turnRunning = false
     private var timing: Timing?
+    /// 这一轮递过来几句、报没报过错：跑完了一句没有又没报错，通话页自己说一声（不让人对着「在听」干等）
+    private var linesThisTurn = 0
+    private var failedThisTurn = false
+    /// 屏幕上那句提示是上一轮的（没接上、没说出话）：下一轮开始就收掉
+    private var noticeIsTurns = false
 
     // 时间线：一代 = 一次没被打断的念；打断就换一代，旧代的回调全不认
     private final class Clip {
@@ -240,7 +247,9 @@ final class CallSession: ObservableObject {
         }
         var t = Timing(stopMouth: stopped, endpoint: Date())
         let backend = backend
+        digesting += 1
         Task {
+            defer { digesting -= 1 }
             var text = "", late: Task<String?, Never>?
             if backend.canHear, let aac = await Task.detached(operation: { CallAudio.aac(pcm) }).value {
                 t.via = backend.hearLabel
@@ -323,21 +332,35 @@ final class CallSession: ObservableObject {
         turnSeq += 1
         let seq = turnSeq
         let l = CallLink(callID: callID, onLine: { [weak self] line in self?.onMain { self?.gotLine(line, seq: seq) } },
-                         onFail: { [weak self] m in self?.onMain { self?.notice = m } })
+                         onFail: { [weak self] m in self?.onMain { self?.turnFailed(m, seq: seq) } })
         link = l
         turnRunning = true
         timing = t
         prevLine = nil
+        linesThisTurn = 0
+        failedThisTurn = false
+        if noticeIsTurns { notice = nil; noticeIsTurns = false }
         updateTA()
         Task {
             await go(l)
             onMain { [weak self] in
                 guard let self, seq == self.turnSeq else { return }
                 self.turnRunning = false
+                // 跑完了、没被打断，却一句都没递过来、也没报错（连着没更新的 Host 会这样）：说一声
+                if self.phase == .live, !l.isCut, self.linesThisTurn == 0, !self.failedThisTurn {
+                    self.turnFailed(String(localized: "这一句 TA 没说出话来，再说一遍试试"), seq: seq)
+                }
                 self.updateTA()
                 self.finishTiming()
             }
         }
+    }
+
+    private func turnFailed(_ message: String, seq: Int) {
+        guard seq == turnSeq else { return }          // 已经是下一轮了：上一轮的错不盖上来
+        failedThisTurn = true
+        notice = message
+        noticeIsTurns = true
     }
 
     private func gotLine(_ line: String, seq: Int) {
@@ -346,6 +369,7 @@ final class CallSession: ObservableObject {
         #endif
         guard seq == turnSeq, phase == .live, link?.isCut == false else { return }
         if timing?.firstLine == nil { timing?.firstLine = Date() }
+        linesThisTurn += 1
         let key = "\(voiceKind.rawValue)|\(line)"
         let clip = Clip(text: line, key: key, source: source(for: line, key: key))
         prevLine = line

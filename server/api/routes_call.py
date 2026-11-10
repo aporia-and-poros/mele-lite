@@ -23,7 +23,7 @@ from brain import archive, call_speech, voice as V
 from brain.call_speech import CallCtx
 from brain.monologue import _ZH_PRONOUN
 from brain.settings import Settings
-from brain.turn import run_turn
+from brain.turn import run_turn, trim_call_reply
 from llm.tts import TTSError
 
 from .deps import Api, account, api, own_conversation
@@ -32,8 +32,35 @@ router = APIRouter()
 log = logging.getLogger(__name__)
 
 FAST_MODEL = "eleven_flash_v2_5"          # ElevenLabs 的「快」；MiniMax 的在 brain/voice.fast_model
-ACTIVE: dict[str, CallCtx] = {}            # 通话编号 → 正在跑 / 刚跑完的那一轮（打断、改字要找它）
+ACTIVE: dict[str, CallCtx] = {}            # 通话编号 → 最新的那一轮（老版 App 的打断、改字不带轮次编号，只能找它）
 TASKS: dict[str, asyncio.Task] = {}        # 通话编号 → 那一轮的任务（挂断时等它收完，纸条排在后面）
+# 11-10：打断 / 改字要落在它说的那一轮上。手机上「打断上一轮」和「开始下一轮」是两个请求，谁先到不一定；
+# 只认「最新一轮」的话，下一轮先到，打断就掐错了人——没念出口的那句照存，该说的这句没了（回顾里有、通话里没有）。
+TURNS: dict[tuple[str, str], CallCtx] = {}             # (通话编号, 轮次编号) → 那一轮
+EARLY_CUTS: dict[tuple[str, str], list[str]] = {}      # 打断比它那一轮先到：先记着，那一轮一登记就停
+KEEP_TURNS = 8                                          # 一通电话只留最近几轮（更早的不会再有人来打断）
+
+
+def _remember(call_id: str, turn_id: str, ctx: CallCtx) -> None:
+    if not turn_id:
+        return
+    TURNS[(call_id, turn_id)] = ctx
+    mine = [k for k in TURNS if k[0] == call_id]
+    for k in mine[:-KEEP_TURNS]:
+        del TURNS[k]
+    early = EARLY_CUTS.pop((call_id, turn_id), None)
+    if early is not None:
+        ctx.stop(early)
+
+
+def _forget(call_id: str) -> None:
+    for book in (TURNS, EARLY_CUTS):
+        for k in [k for k in book if k[0] == call_id]:
+            del book[k]
+
+
+def _ids(body: dict) -> tuple[str, str]:
+    return str(body.get("call_id") or "").strip()[:64], str(body.get("turn") or "").strip()[:64]
 
 
 def _audio_dir(a: Api) -> Path:
@@ -97,7 +124,7 @@ async def turn(conv: UUID, body: dict = Body(...), acc: UUID = Depends(account),
     """电话里说完一句：跑一轮，切好的句子按事件流推回去（line），最后 done。手机断开了这一轮照样跑完、存下。"""
     scope = await _scope(a, acc, conv)
     text = str(body.get("text") or "").strip()
-    call_id = str(body.get("call_id") or "").strip()[:64]
+    call_id, turn_id = _ids(body)
     answered = bool(body.get("answered"))           # TA 打来、你接了（第 4 步）：没有你说的话，TA 先开口
     if (not text and not answered) or not call_id:
         raise HTTPException(400, "要带 text 和 call_id")
@@ -107,9 +134,11 @@ async def turn(conv: UUID, body: dict = Body(...), acc: UUID = Depends(account),
         pronoun = _ZH_PRONOUN.get(settings.user_pronoun, "TA") if settings.lang == "zh" else settings.user_pronoun
         aside = call_speech.answered_nudge(settings.lang, pronoun, str(body.get("reason") or ""))
     q: asyncio.Queue = asyncio.Queue()
-    ctx = CallCtx(call_id, on_line=lambda line: q.put_nowait({"type": "line", "text": line}))
+    ctx = CallCtx(call_id, on_line=lambda line: q.put_nowait({"type": "line", "text": line}),
+                  on_fail=lambda message: q.put_nowait({"type": "error", "message": message}))
     prev = TASKS.get(call_id)
     ACTIVE[call_id] = ctx
+    _remember(call_id, turn_id, ctx)
 
     async def emit(ev: dict) -> None:
         await a.rooms.publish(conv, ev)            # 聊天页开着的话跟着刷新
@@ -143,14 +172,22 @@ async def turn(conv: UUID, body: dict = Body(...), acc: UUID = Depends(account),
 async def cut(conv: UUID, body: dict = Body(...), acc: UUID = Depends(account), a: Api = Depends(api)):
     """她开口打断 / 挂了：spoken = 已经念出来（或正念着）的那几句。还在写的停下；写完存好了的改成只留念到的。"""
     await _scope(a, acc, conv)
-    ctx = ACTIVE.get(str(body.get("call_id") or ""))
+    call_id, turn_id = _ids(body)
+    spoken = [str(x) for x in body.get("spoken") or []]
+    if turn_id:
+        ctx = TURNS.get((call_id, turn_id))
+        if ctx is None:                            # 它那一轮还没登记（打断跑在了前头）：记着，一登记就停
+            EARLY_CUTS[(call_id, turn_id)] = spoken
+            while len(EARLY_CUTS) > 64:
+                del EARLY_CUTS[next(iter(EARLY_CUTS))]
+            return {"ok": True}
+    else:
+        ctx = ACTIVE.get(call_id)
     if ctx is None:
         return {"ok": False}
-    spoken = [str(x) for x in body.get("spoken") or []]
     ctx.stop(spoken)
     if ctx.assistant_msg is not None and len(spoken) < len(ctx.lines):
-        said = ctx.saved_text()
-        await archive.set_call_text(a.deps.pool, ctx.assistant_msg, said, {"id": ctx.id, "cut": True})
+        await trim_call_reply(a.deps.pool, ctx)
     return {"ok": True}
 
 
@@ -158,15 +195,19 @@ async def cut(conv: UUID, body: dict = Body(...), acc: UUID = Depends(account), 
 async def fix(conv: UUID, body: dict = Body(...), acc: UUID = Depends(account), a: Api = Depends(api)):
     """准确的字回来了（比 1.5 秒慢的那次）：把存档里手机识别的那句换掉"""
     await _scope(a, acc, conv)
-    ctx = ACTIVE.get(str(body.get("call_id") or ""))
+    call_id, turn_id = _ids(body)
     text = str(body.get("text") or "").strip()
-    if ctx is None or not text:
+    if not text:
         return {"ok": False}
-    for _ in range(50):                            # 这一轮刚开始，你那句可能还没存下
-        if ctx.user_msg is not None:
+    ctx = None
+    for _ in range(50):                            # 这一轮刚开始，可能还没登记、你那句可能还没存下
+        ctx = TURNS.get((call_id, turn_id)) if turn_id else ACTIVE.get(call_id)
+        if ctx is not None and ctx.user_msg is not None:
+            break
+        if ctx is None and not turn_id:
             break
         await asyncio.sleep(0.1)
-    if ctx.user_msg is None:
+    if ctx is None or ctx.user_msg is None:
         return {"ok": False}
     await archive.set_call_text(a.deps.pool, ctx.user_msg, text, {"id": ctx.id})
     return {"ok": True}
@@ -182,6 +223,7 @@ async def end(conv: UUID, body: dict = Body(...), acc: UUID = Depends(account), 
     if task is not None and not task.done():
         await asyncio.wait([task], timeout=30)
     ACTIVE.pop(call_id, None)
+    _forget(call_id)
     lang = Settings.from_dict(await archive.get_settings(a.deps.pool, scope.companion)).lang
     m = await archive.add_message(a.deps.pool, conv, "user", call_speech.hang_up_note(seconds, lang), now=a.deps.now(),
                                   call={"id": call_id, "end": True, "seconds": seconds,

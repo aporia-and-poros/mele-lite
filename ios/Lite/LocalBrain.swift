@@ -1030,15 +1030,19 @@ final class LocalBrain: @unchecked Sendable {
         // 电话（10-31）：存的是念出来的那几句（一句一行）；被她打断的只存念到的，末尾一个「——」让它知道话被截了
         if let call {
             call.flush()
-            var said = (call.spokenLines ?? call.lines).joined(separator: "\n")
-            if call.isCut, !said.isEmpty { said += "——" }
+            let take = call.takeForSaving()
+            var said = take.lines.joined(separator: "\n")
+            if take.cut, !said.isEmpty { said += "——" }
             if !said.isEmpty || !cards.isEmpty {
                 let m = host.store.addMessage(conv, role: "assistant", text: said, cards: cards,
-                                              extra: call.isCut && !said.isEmpty ? ["call": true, "cut": true, "call_id": call.callID]
-                                                                                  : ["call": true, "call_id": call.callID])
-                call.assistantMessageID = m["id"] as? Int
+                                              extra: take.cut && !said.isEmpty ? ["call": true, "cut": true, "call_id": call.callID]
+                                                                                : ["call": true, "call_id": call.callID])
+                // 正存着的那一会儿她开口了（11-10）：打断那头还不知道这条的编号、改不了，这里把刚存的整段改回念到的
+                if let id = m["id"] as? Int, let spoken = call.saved(as: id), spoken.count < take.lines.count {
+                    callTrim(conv, message: id, spoken: spoken)
+                }
             }
-            if said.isEmpty, cards.isEmpty, !call.isCut { call.fail(zh ? "\(contact.name) 没说出话来" : "\(contact.name) didn't say anything") }
+            if said.isEmpty, cards.isEmpty, !take.cut { call.fail(zh ? "\(contact.name) 没说出话来" : "\(contact.name) didn't say anything") }
             say(["type": "done"])
             LocalEcho.maybeRoll(host, conversation: conv)
             return !said.isEmpty
@@ -1417,63 +1421,6 @@ final class LocalBrain: @unchecked Sendable {
         }
         let short = msg.count > 160 ? String(msg.prefix(160)) + "…" : msg
         return (zh ? "模型那边出错了：" : "The model returned an error: ") + short
-    }
-}
-/// 一通电话递给大脑的把手（10-31）：切好的句子交给通话页；她开口打断 / 挂了就停；存档只存真念出来的
-final class CallLink: @unchecked Sendable {
-    private let lock = NSLock()
-    private var splitter = CallSpeech.Splitter()
-    private var _cut = false
-    private var _spoken: [String]?
-    private var _lines: [String] = []
-    private var _userMessageID: Int?
-    private var _assistantMessageID: Int?
-    /// 切好一句（已洗过）：通话页拿去合成、排进时间线
-    let onLine: @Sendable (String) -> Void
-    /// 这一轮没成（没 key、模型报错、什么都没说）：通话页显示一句
-    let onFail: @Sendable (String) -> Void
-    /// 这一通电话的编号：同一通的几条消息都带着，点开「通话时长」那行按它取
-    let callID: String
-
-    init(callID: String, onLine: @escaping @Sendable (String) -> Void, onFail: @escaping @Sendable (String) -> Void) {
-        self.callID = callID
-        self.onLine = onLine
-        self.onFail = onFail
-    }
-
-    var isCut: Bool { lock.withLock { _cut } }
-    /// 它这一轮切出来的全部句子
-    var lines: [String] { lock.withLock { _lines } }
-    /// 被打断时通话页告诉的「念到了哪几句」；没打断是 nil
-    var spokenLines: [String]? { lock.withLock { _spoken } }
-    var userMessageID: Int? {
-        get { lock.withLock { _userMessageID } }
-        set { lock.withLock { _userMessageID = newValue } }
-    }
-    /// 它这一轮存下的那条（写完才有）
-    var assistantMessageID: Int? {
-        get { lock.withLock { _assistantMessageID } }
-        set { lock.withLock { _assistantMessageID = newValue } }
-    }
-
-    func feed(_ chunk: String) { emit(lock.withLock { splitter.feed(chunk) }) }
-    /// 已经切好的一句（Host 那边切好推来的）
-    func deliver(_ line: String) { if !line.isEmpty { emit([line]) } }
-    func flush() { emit(lock.withLock { splitter.finish() }) }
-
-    /// 停：spoken = 已经念出来（或正念着）的那几句
-    func cut(spoken: [String]) { lock.withLock { _cut = true; _spoken = spoken } }
-
-    func fail(_ message: String) { onFail(message) }
-
-    private func emit(_ out: [String]) {
-        guard !out.isEmpty else { return }
-        let go = lock.withLock { () -> [String] in
-            guard !_cut else { return [] }
-            _lines += out
-            return out
-        }
-        for l in go { onLine(l) }
     }
 }
 #endif

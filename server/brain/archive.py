@@ -93,6 +93,14 @@ async def set_call_text(pool, message_id: int, text: str, call: dict) -> None:
                        message_id, text, json.dumps(call, ensure_ascii=False))
 
 
+async def drop_call_reply(pool, message_id: int) -> bool:
+    """电话里它写完了、一句都没念出口就被打断：这条不留，不然回看时多出一句当时没听到的话。
+    带着卡片的不删（卡片是它真做了的事），返回 False，外面把正文清空就行。"""
+    status = await pool.execute("DELETE FROM chat_messages WHERE id = $1 AND role = 'assistant' AND call IS NOT NULL AND NOT rolled "
+                                "AND (cards IS NULL OR cards::text IN ('[]', 'null'))", message_id)
+    return status.split()[-1] != "0"
+
+
 async def get_message(pool, message_id: int) -> StoredMsg | None:
     r = await pool.fetchrow(f"SELECT {_MSG_COLS} FROM chat_messages WHERE id = $1", message_id)
     return _msg(r) if r else None

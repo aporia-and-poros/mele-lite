@@ -196,6 +196,7 @@ class CallCtx:
     spoken: list[str] | None = None        # 被打断时手机告诉的「念到了哪几句」
     user_msg: int | None = None
     assistant_msg: int | None = None
+    on_fail: Callable[[str], None] | None = None     # 这一轮没成，只告诉通话页（聊天页不跟着报错）
 
     def feed(self, chunk: str) -> None:
         if self.cut:
@@ -218,3 +219,12 @@ class CallCtx:
     def saved_text(self) -> str:
         said = "\n".join(self.spoken if self.spoken is not None else self.lines)
         return said + "——" if self.cut and said else said
+
+    def fail(self, message: str) -> None:
+        if self.on_fail is not None:
+            self.on_fail(message)
+
+
+def said_nothing(lang: str) -> str:
+    """这一轮它一句能念的都没写出来（只写了动作、表情包之类）：通话页上说一声，别让人干等"""
+    return "这一句没说出话来，再说一遍试试" if lang == "zh" else "Nothing came out that time. Try saying it again."

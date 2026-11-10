@@ -860,6 +860,17 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
     return TurnOutcome(bool(out.text.strip()), usd or 0.0)
 
 
+async def trim_call_reply(pool, call: CallCtx) -> None:
+    """它那句已经存下了，手机才说「只念到这几句」：存档改成念到的 + 「——」；一句都没念出口的整条不留"""
+    if call.assistant_msg is None:
+        return
+    said = call.saved_text()
+    if not said and await archive.drop_call_reply(pool, call.assistant_msg):
+        call.assistant_msg = None
+        return
+    await archive.set_call_text(pool, call.assistant_msg, said, {"id": call.id, "cut": True})
+
+
 async def _call_done(deps: Deps, scope: Scope, call: CallCtx, out: LoopResult, route: Route, req: ChatRequest, state: dict,
                      state_key: UUID, turn_no: int, day: date, now: datetime, emit: Emit, lang: str, settings: Settings,
                      adapter, parts: ContextParts, seconds: float) -> TurnOutcome:
@@ -874,6 +885,11 @@ async def _call_done(deps: Deps, scope: Scope, call: CallCtx, out: LoopResult, r
         saved = await archive.add_message(pool, conv, "assistant", said, tools="\n".join(out.tool_notes), cards=out.cards,
                                           now=deps.now(), call={"id": call.id, **({"cut": True} if call.cut and said else {})})
         call.assistant_msg = saved.id
+        # 正存着的时候她开口了（11-10）：存下的是整段，打断那头还不知道这条的编号、改不了，这里改回只留念到的
+        if call.cut and call.saved_text() != said and len(call.spoken or []) < len(call.lines):
+            await trim_call_reply(pool, call)
+    elif not call.cut:                           # 一句能念的都没有：通话页说一声，别让人对着「在听」干等
+        call.fail(call_speech.said_nothing(lang))
     state.update(turn_count=turn_no, last_tools=out.tools_used, last_prompt_tokens=out.last_prompt or state.get("last_prompt_tokens", 0))
     await archive.save_state(pool, state_key, state)
     await archive.log_turn(pool, conv, {"turn": turn_no, "model": route.chat_model, "call": call.id, "cut": call.cut,

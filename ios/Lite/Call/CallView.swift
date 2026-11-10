@@ -147,7 +147,7 @@ struct CallView: View {
         case .ended: String(localized: "通话结束")
         case .live:
             switch call.ta {
-            case .listening: String(localized: "在听")
+            case .listening: call.digesting > 0 ? String(localized: "听到了…") : String(localized: "在听")
             case .thinking: String(localized: "在想…")
             case .speaking: String(localized: "在说")
             }
