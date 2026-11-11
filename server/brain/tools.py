@@ -880,6 +880,19 @@ async def _food(ctx: ToolContext, a: dict) -> str:
 
 _AT = {"type": "string", "description": "TA 那边的本地时间，格式 YYYY-MM-DD HH:MM"}
 
+async def _go_to(ctx: ToolContext, args: dict) -> str:
+    """它自己挪地方（它的一天，11-11 搬上 Host；跟 Lite 的 go_to 一样）"""
+    from . import world
+    pls = await world.places(ctx.pool, ctx.user_id)
+    pl = world.find_place(pls, str(args.get("place") or ""))
+    if pl is None:
+        return "没有这个地方。你的地方只有：" + "、".join(p["name"] for p in pls)
+    doing = str(args.get("doing") or "").strip()
+    await world.move(ctx.pool, ctx.user_id, ctx.tz, ctx.now, pl["id"], doing)
+    ctx.cards.append(Card("place", f"去了：{pl['name']}" + (f"，{doing}" if doing else "")))
+    return f"挪好了：你现在在「{pl['name']}」" + (f"，{doing}" if doing else "") + "。从下一句起照这个说。"
+
+
 _TOOLS: dict[str, tuple[ToolSpec, Callable[[ToolContext, dict], Awaitable[str]]]] = {
     "memory_remember": (ToolSpec("memory_remember", "用途：记下一件一年后还想记得的事（TA 的纠正、你们说定的事、让你心里一动的话、TA 生活里的大事）。同一个话题合成一条；只记确定的事，不记猜测；闲聊、记过的、只管今天的、一时的见闻感受不记。细则见手册 memory。", {
         "type": "object", "required": ["content"], "properties": {
@@ -1074,6 +1087,11 @@ _TOOLS: dict[str, tuple[ToolSpec, Callable[[ToolContext, dict], Awaitable[str]]]
             "reason": {"type": "string", "description": "为什么想打，一句"},
             "withdraw": {"type": "boolean", "description": "true = 还没接通就挂掉"}}}),
         _phone_call),
+    "go_to": (ToolSpec("go_to", "用途：挪一下你此刻在哪、在干嘛（你自己的一天）。你说要回家 / 出门 / 换个地方，或者 TA 说你在别处而你接受了，就挪过去——不挪的话〔现在〕那行还会把你留在原地。place 只能是你自己的地方（〔现在〕那行和地图上有的；回家写「家」也行）；doing 一句你到那儿做什么（12 字内）。", {
+        "type": "object", "required": ["place"], "properties": {
+            "place": {"type": "string", "description": "你的地方的名字"},
+            "doing": {"type": "string", "description": "到那儿做什么"}}}),
+        _go_to),
     "list_clocks": (ToolSpec("list_clocks", "用途：看你自己约的，带编号和时间（TA 的提醒在待办里，用 todo 看）。", {
         "type": "object", "properties": {}}),
         _list_clocks),
@@ -1087,7 +1105,7 @@ INCOGNITO_TOOLS = ("read_manual",)
 # 只在某些单独的小轮里给的（朋友圈来刷：点赞、评论），聊天里不给
 SIDE_TOOLS = ("moment_like", "moment_comment", "album_write", "tarot_write")
 # 有条件才给的（画图：Me 里挑了画图钥匙，10-15）：extra 里点名才进清单，能不能用工具自己再查
-OPTIONAL_TOOLS = ("draw", "phone_call")   # 打电话（10-31）：手机登记过来电、不在电话里 / 群里 / 无痕才给
+OPTIONAL_TOOLS = ("draw", "phone_call", "go_to")   # 打电话（10-31）：手机登记过来电、不在电话里 / 群里 / 无痕才给
 
 
 def tool_specs(incognito: bool = False, extra: tuple[str, ...] = ()) -> list[ToolSpec]:
@@ -1115,7 +1133,7 @@ _NOTE = {
            "unsaved": "想记「{c}」，跟旧的很像，没存", "search": "翻记忆「{q}」", "sticky": "写了便利贴",
            "manual": "翻了手册「{n}」", "person_get": "看了人物卡「{n}」", "person_write": "写了人物卡「{n}」",
            "todo": "待办：{act}", "sticker_send": "发了表情包「{c}」", "sticker_search": "找表情包「{q}」", "schedule_self": "给自己约了 {at}「{c}」",
-           "cancel_self": "取消了自己约的 #{id}", "list_clocks": "看了钟",
+           "cancel_self": "取消了自己约的 #{id}", "list_clocks": "看了钟", "go_to": "去了「{n}」",
            "date_add": "记下了远事 {day}「{c}」", "date_update": "改了远事 #{id}", "date_list": "看了记着的远事",
            "date_done": "了结了远事 #{id}", "drawer_put": "往抽屉里放了一封「{c}」", "drawer_mine": "翻了抽屉",
            "drawer_key": "给了 #{id} 的钥匙", "drawer_burn": "烧掉了 #{id}", "relationship": "把关系改成了「{to}」",
@@ -1131,7 +1149,7 @@ _NOTE = {
            "sticky": "rewrote the sticky note", "manual": "read the manual \"{n}\"",
            "person_get": "looked at {n}'s card", "person_write": "wrote {n}'s card",
            "todo": "to-do: {act}", "sticker_send": "sent a sticker \"{c}\"", "sticker_search": "looked for a sticker \"{q}\"", "schedule_self": "set one for yourself at {at} \"{c}\"",
-           "cancel_self": "cancelled your own #{id}", "list_clocks": "looked at the clocks",
+           "cancel_self": "cancelled your own #{id}", "list_clocks": "looked at the clocks", "go_to": "went to \"{n}\"",
            "date_add": "kept a date {day} \"{c}\"", "date_update": "changed date #{id}", "date_list": "looked at the dates",
            "date_done": "closed date #{id}", "drawer_put": "put a letter in the drawer \"{c}\"",
            "drawer_mine": "looked through the drawer", "drawer_key": "gave the key to #{id}", "drawer_burn": "burned #{id}",
@@ -1228,6 +1246,9 @@ def tool_note(name: str, args: dict, result: str, lang: str) -> str:
         if act == "read":
             return t["tarot_read"].format(id=a.get("id"))
         return t["tarot_list"]
+    if name == "go_to":
+        line = t["go_to"].format(n=_snip(str(a.get("place") or "")))
+        return line if result.startswith("挪好了") else f"{line} ✗"
     if name == "book":
         act = str(a.get("action") or "")
         if act == "mark":

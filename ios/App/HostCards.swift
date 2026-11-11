@@ -22,6 +22,13 @@ enum HostLink {
         guard let b = hostBuild else { return false }
         return String(b.prefix(8)) < minHostBuild
     }
+    /// Host 有没有某天以后才有的功能（镜像日期 ≥ day）；没报版本戳的老镜像 = 没有
+    static func hostHas(since day: String) -> Bool {
+        guard let b = hostBuild, b.count >= 8 else { return false }
+        return String(b.prefix(8)) >= day
+    }
+    /// 地图 + 它的一天搬上 Host 的那天（11-11）
+    static let worldSince = "20261111"
 
     /// 连着 Host 时每次打开 App 问一次 /version，记下版本戳
     static func refreshBuild() async {

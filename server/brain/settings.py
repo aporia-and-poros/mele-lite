@@ -105,7 +105,8 @@ class Settings:
     mm_voice_model: str = ""            # MiniMax 的模型；空 = 默认（llm/tts.MM_NOTE_MODEL）
     mcp_servers: list[str] = field(default_factory=list)   # 这个 TA 能用的 MCP 服务（10-05，Host；brain/mcp.py）
     talk_rules: str = ""                # 说话规矩（10-05）：用户写了就换掉说明书里出厂的两条（一两句就够 / 直接说）；空 = 出厂
-    offline_life: bool = False          # 线下生活（10-05）：关着 = 说明书里没有「你有自己的一天」；Lite 本机还管地图 / 它的一天
+    offline_life: bool = False          # 线下生活（10-05）：关着 = 说明书里没有「你有自己的一天」、没有地图 / 它的一天
+    scene_place: int | None = None      # 从地图上找过去的那场线下在哪（world_places.id）；回线上清掉（11-11，brain/world.py）
     other_rooms_count: int = 30         # 一段脑子（10-11 群聊）：别的房间（群 / 私聊）最近几条按时间穿插进来；0 = 不合
     bilingual: bool = False             # 双语气泡（10-15）：TA 的泡原文在上、译文在下（brain/bilingual.py）
     bilingual_lang: str = "English"     # TA 说什么话

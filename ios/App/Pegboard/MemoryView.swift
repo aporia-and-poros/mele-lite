@@ -179,7 +179,12 @@ struct OfflineSheet: View {
                         }
                     }
                 } footer: {
-                    Text("线下：场景、动作、心里想的，长段地写。聊天页右上角 ⋯ 里能切回线上。")
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("线下：场景、动作、心里想的，长段地写。聊天页右上角 ⋯ 里能切回线上。")
+                        if Lite.hosted {          // 地图 + 它的一天 11-11 搬上 Host，老 Host 还没有
+                            Text("想要 TA 自己的地图和一天：在服务器上跑 mele-host update，更新以后这里就是地图。")
+                        }
+                    }
                 }
             }
             .navigationTitle("去线下")

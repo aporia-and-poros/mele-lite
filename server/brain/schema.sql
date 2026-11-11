@@ -896,3 +896,23 @@ CREATE TABLE IF NOT EXISTS memory_links (          -- 让别的 AI 连上 TA 的
   secret       BYTEA       NOT NULL,                 -- 主密钥加密的原文：App 里随时能再看、再复制
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- 地图 + 它的一天（11-11 Aporia：连 Host 也要有；brain/world.py，跟 Lite 的 LocalMap 同一套）
+CREATE TABLE IF NOT EXISTS world_places (
+  id           SERIAL      PRIMARY KEY,
+  account_id   UUID        NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  companion_id UUID        NOT NULL REFERENCES companions(id) ON DELETE CASCADE,
+  name         TEXT        NOT NULL,
+  descr        TEXT        NOT NULL DEFAULT '',
+  icon         TEXT        NOT NULL DEFAULT 'park',
+  slot         INT         NOT NULL DEFAULT 0,             -- 地图上第几个空位
+  home         BOOLEAN     NOT NULL DEFAULT false,         -- 家：永远有一个，不能删
+  by_who       TEXT        NOT NULL DEFAULT 'ai'           -- ai = 它起的（重起世界时换掉）/ user = 你加的（留着）
+);
+CREATE INDEX IF NOT EXISTS world_places_companion_idx ON world_places (companion_id);
+CREATE TABLE IF NOT EXISTS world_days (            -- 每人每天一份行程：[{time HH:MM, place_id, doing}]，留 14 天
+  companion_id UUID        NOT NULL REFERENCES companions(id) ON DELETE CASCADE,
+  day          DATE        NOT NULL,
+  items        JSONB       NOT NULL DEFAULT '[]',
+  PRIMARY KEY (companion_id, day)
+);

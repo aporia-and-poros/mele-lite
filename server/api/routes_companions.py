@@ -141,6 +141,8 @@ async def patch_companion(cid: UUID, body: dict = Body(...), acc: UUID = Depends
     await own_companion(a, acc, cid)
     try:
         s = Settings.from_dict({**(await archive.get_settings(pool, cid)), **(body.get("settings") or {})})
+        if (body.get("settings") or {}).get("long_mode") is False:
+            s.scene_place = None          # 回线上：地图上找过去的那场线下结束了（11-11，跟 Lite 一样）
         if body.get("persona") is not None:
             if "traits" in body["persona"]:
                 traits.check(body["persona"]["traits"])

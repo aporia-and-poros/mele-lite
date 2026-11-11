@@ -1,9 +1,10 @@
 import SwiftUI
 
-/// 地图入口：Lite = 每个人自己的世界 + 它的一天（10-04 Aporia定 B）；Mele（服务器还没做）= 挑人去线下
+/// 地图入口：Lite = 每个人自己的世界 + 它的一天（10-04 Aporia定 B）；连 Host 的 11-11 起也有（Host 要更新到 11-11 以后）；
+/// Mele 正式版（服务器没接这套）和没更新的 Host = 挑人去线下
 struct MapSheet: View {
     var body: some View {
-        if Lite.local { WorldMapView() } else { OfflineSheet() }
+        if Lite.local || (Lite.hosted && HostLink.hostHas(since: HostLink.worldSince)) { WorldMapView() } else { OfflineSheet() }
     }
 }
 

@@ -43,6 +43,7 @@ from .scope import Scope
 from .persona import Persona, render_base, tone_lines
 from .settings import Settings
 from . import edits, keepalive
+from . import world
 from food import store as food_store
 from music import ears
 
@@ -643,6 +644,11 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
                                  every=await _safe(lore.get_every(pool, acc), lore.OCCASIONAL_EVERY))
             if occ:
                 before = [*before, occ]
+        if world.life_on(settings):  # 它的一天 / 地图（11-11 搬上 Host）：此刻在哪；今天还没排就后台排
+            where_now = await _safe(world.now_line(pool, comp, settings, now, lang), "")
+            if where_now:
+                before = [*before, where_now]
+            await _safe(world.kick_day(deps, acc, comp, settings, now), None)
         side = context_line.render(items, now, settings.tz, lang)
         if side and context_line.due(items, now, last_at=state.get("side_at"), last_key=state.get("side_key"),
                                      wake=bool(wake)):   # TA 那边：天气、在哪、日程、步数、快捷指令（09-28）；不是每轮都给
@@ -661,7 +667,8 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
                                                else timeline.private_room(lang == "zh"), lang)) if merged_rooms else ""
     parts = ContextParts(
         tools=[t for t in tool_specs() if t.name in GROUP_TOOLS] if group is not None
-        else tool_specs(incognito=scope.incognito, extra=(("draw",) if draw_on else ()) + (("phone_call",) if phone_on else ()))
+        else tool_specs(incognito=scope.incognito, extra=(("draw",) if draw_on else ()) + (("phone_call",) if phone_on else ())
+                     + (("go_to",) if world.life_on(settings) else ()))
         + outside.specs,
         base=(G.room_rules(zh=lang == "zh", group=group.name, me=persona.name or "TA", user_name=ulabel,
                            others=list(group.others)) + "\n\n" if group is not None else "") + render_base(persona, core, lang,
