@@ -55,8 +55,10 @@ targets:
         # 语音通话（10-31）：边说边出灰字用 iPhone 自带的识别（会经过苹果的识别服务）；锁屏 / 切走时电话不断
         NSSpeechRecognitionUsageDescription: 给 TA 打电话时，把你正在说的话先变成字显示出来（用 iPhone 自带的语音识别，会经过苹果的识别服务）。
         UIBackgroundModes: [audio, voip]
-        NSHealthShareUsageDescription: 首页健康小组件显示步数、距离、活动消耗、睡眠、心率；你打开「步数和睡眠」后，TA 聊天时知道你今天走了多少、昨晚睡了多久（只读）。
-        NSHealthUpdateUsageDescription: Mele Lite 不会往「健康」里写任何数据，只读步数、睡眠等给首页小组件看。
+        # 切走以后接着回（11-13，iOS 26 BGContinuedProcessingTask）：每轮一个 chat.mele.app.reply.xxxx
+        BGTaskSchedulerPermittedIdentifiers: [chat.mele.app.reply.*]
+        NSHealthShareUsageDescription: 首页健康小组件显示步数、距离、活动消耗、睡眠、心率；你打开「步数和睡眠」后，TA 聊天时知道你今天走了多少、昨晚睡了多久；经期页读你在「健康」里记过的月经日期。
+        NSHealthUpdateUsageDescription: 你打开经期页的「同步苹果健康」后，在 Mele 里记的月经流量会存一份到「健康」，其他数据不写。
         NSAppleMusicUsageDescription: 让 TA 知道你在「音乐」里放什么歌。
         NSLocalNetworkUsageDescription: 连你自己在家里电脑上部署的记忆库（MCP 服务）。
         # TA 那边（10-04）：Me 里单独打开才会问

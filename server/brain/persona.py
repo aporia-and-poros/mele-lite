@@ -247,8 +247,9 @@ def render_base(persona: Persona, core: list[str], lang: str = "zh", monologue: 
     # 用户设了性别就用它自己的口吻写一句（09-28 Aporia：它老说自己没有脸没有头发，对爱角色扮演的用户不好；
     # 没设的保持只叫 TA）。导入的人设也带上。
     sex = L[persona.gender] if persona.gender in ("female", "male") else ""
-    if persona.imported.strip():
-        parts.append(f"{L['who']}\n" + (f"{sex}\n" if sex else "") + persona.imported.strip())
+    if persona.imported.strip():          # 「TA 怎么叫你」照样带上（11-12：跟 Lite 本机一样，导了卡也认）
+        call = f"\n{L['call']}{persona.call_user.strip()}" if persona.call_user.strip() else ""
+        parts.append(f"{L['who']}\n" + (f"{sex}\n" if sex else "") + persona.imported.strip() + call)
     else:
         lines = [f"{L['name']}{persona.name}"]
         if sex:

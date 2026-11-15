@@ -151,6 +151,7 @@ struct MainTabView: View {
             case "focus": NotificationCenter.default.post(name: .lumiOpenFocus, object: nil)
             case "drawer": NotificationCenter.default.post(name: .lumiOpenDrawer, object: nil)
             case "todo": NotificationCenter.default.post(name: .lumiOpenTodo, object: nil)
+            case "cycle": NotificationCenter.default.post(name: .lumiOpenCycle, object: nil)
             case "diary": NotificationCenter.default.post(name: .lumiOpenDiary, object: nil)
             case "calendar": NotificationCenter.default.post(name: .lumiOpenCalendar, object: nil)
             case "moments": NotificationCenter.default.post(name: .lumiOpenMoments, object: nil)
@@ -281,6 +282,7 @@ private struct RoomCovers: ViewModifier {
     @State private var showPeople = false
     @State private var showDiary = false
     @State private var showTodo = false
+    @State private var showCycle = false
     @State private var showStickers = false
     @State private var showCalendar = false
     @State private var showMoments = false
@@ -308,6 +310,8 @@ private struct RoomCovers: ViewModifier {
             .fullScreenCover(isPresented: $showDiary) { DiaryView().environmentObject(model).environmentObject(theme) }
             .onReceive(NotificationCenter.default.publisher(for: .lumiOpenTodo)) { _ in showTodo = true }
             .fullScreenCover(isPresented: $showTodo) { TodoRoomView().environmentObject(model).environmentObject(theme) }
+            .onReceive(NotificationCenter.default.publisher(for: .lumiOpenCycle)) { _ in showCycle = true }
+            .fullScreenCover(isPresented: $showCycle) { CycleRoomView().environmentObject(model).environmentObject(theme) }
             .onReceive(NotificationCenter.default.publisher(for: .lumiOpenStickers)) { _ in showStickers = true }
             .fullScreenCover(isPresented: $showStickers) { StickerRoomView().environmentObject(model).environmentObject(theme) }
             .onReceive(NotificationCenter.default.publisher(for: .lumiOpenFavorites)) { _ in showFavorites = true }

@@ -28,6 +28,7 @@ struct MeView: View {
                 if !Lite.on { AccountCard() }
                 AppIconsCard()
                 #if LITE
+                if Lite.local, KeepReplying.supported { KeepReplyingCard() }   // 切走以后接着回（11-13）
                 BackupCard()          // 一键备份 / 从备份恢复（10-10 内测前）
                 #endif
                 if Lite.on { AboutCard() }

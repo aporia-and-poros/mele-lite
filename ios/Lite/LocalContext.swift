@@ -7,8 +7,9 @@ import Foundation
 /// - 不是每轮都给（09-28 Aporia：每轮都给它就每条思考都在念天气和步数）：这个窗口第一次、隔了两小时、换了地方，才给。
 /// - 在听的歌不在这行里，〔在听〕那行管。
 enum LocalContext {
-    static let kinds = ["weather", "place", "calendar", "health"]
-    static let maxAge: [String: TimeInterval] = ["weather": 3 * 3600, "place": 3 * 3600, "calendar": 12 * 3600, "health": 3 * 3600]
+    static let kinds = ["weather", "place", "calendar", "health", "cycle"]
+    static let maxAge: [String: TimeInterval] = ["weather": 3 * 3600, "place": 3 * 3600, "calendar": 12 * 3600, "health": 3 * 3600,
+                                                 "cycle": 36 * 3600]
     static let reshow: TimeInterval = 2 * 3600
     private static let file = "context.json"
     private static let shownFile = "context-shown.json"
@@ -23,9 +24,10 @@ enum LocalContext {
 
     /// 这一轮要不要给、给的话是哪一行（给了就记下这个窗口给过）
     /// force：她这句在问这些（ContextReporter.asks），隔多久都给（10-13）
-    static func line(_ s: LocalStore, conversation: String, zh: Bool, force: Bool = false, now: Date = Date()) -> String {
+    static func line(_ s: LocalStore, conversation: String, zh: Bool, force: Bool = false, companion: String? = nil,
+                     now: Date = Date()) -> String {
         let items = fresh(s, now: now)
-        let text = render(items, now: now, zh: zh)
+        let text = render(items, now: now, zh: zh, companion: companion)
         guard !text.isEmpty else { return "" }
         var shown = s.read(shownFile) as? [String: Any] ?? [:]
         let last = shown[conversation] as? [String: Any]
@@ -47,18 +49,20 @@ enum LocalContext {
         return out
     }
 
-    /// 「TA 那边有没有变」只看在哪（天气、步数一直在小变，不算）
+    /// 「TA 那边有没有变」只看在哪、经期那一句（天气、步数一直在小变，不算）
     private static func placeKey(_ items: [String: ([String: Any], Date)]) -> String {
-        guard let p = items["place"]?.0 else { return "" }
-        return (p["at_home"] as? Bool ?? false) ? "home" : (p["name"] as? String ?? "")
+        let cycle = items["cycle"].map { "|" + ($0.0["key"] as? String ?? "") } ?? ""
+        guard let p = items["place"]?.0 else { return cycle }
+        return ((p["at_home"] as? Bool ?? false) ? "home" : (p["name"] as? String ?? "")) + cycle
     }
 
-    static func render(_ items: [String: ([String: Any], Date)], now: Date, zh: Bool) -> String {
+    static func render(_ items: [String: ([String: Any], Date)], now: Date, zh: Bool, companion: String? = nil) -> String {
         var parts: [String] = []
         for kind in kinds {
             guard let (d, at) = items[kind] else { continue }
             let s: String
             switch kind {
+            case "cycle": s = cycle(d, zh: zh, companion: companion)
             case "weather": s = weather(d)
             case "place": s = place(d, ago: now.timeIntervalSince(at), zh: zh)
             case "calendar": s = calendar(d, now: now, zh: zh)
@@ -109,6 +113,12 @@ enum LocalContext {
             out.append((ev["all_day"] as? Bool ?? false) ? "\(word) \(title)" : "\(word) \(hm.string(from: start)) \(title)")
         }
         return out.joined(separator: zh ? "；" : "; ")
+    }
+
+    /// 经期（11-15 Aporia）：手机算好的一句；只给主联系人时别的联系人不给。照 server context_line._cycle
+    private static func cycle(_ d: [String: Any], zh: Bool, companion: String?) -> String {
+        if (d["share"] as? String) == "main", companion == nil || (d["companion_id"] as? String)?.lowercased() != companion?.lowercased() { return "" }
+        return String(((zh ? d["text_zh"] : d["text_en"]) as? String ?? "").prefix(200))
     }
 
     private static func health(_ d: [String: Any], zh: Bool) -> String {

@@ -236,8 +236,8 @@ async def models(provider: str | None = None, acc: UUID = Depends(account)):
 
 @router.put("/me/context/{kind}", status_code=204)
 async def put_context(kind: str, body: dict = Body(...), acc: UUID = Depends(account), a: Api = Depends(api)):
-    """手机报：weather / place / calendar / health，每样覆盖最新一份。"""
-    if kind not in ("weather", "place", "calendar", "health"):
+    """手机报：weather / place / calendar / health / cycle（经期，11-15），每样覆盖最新一份。"""
+    if kind not in ("weather", "place", "calendar", "health", "cycle"):
         raise HTTPException(400, "不认识这一样")
     await context_line.save(a.deps.pool, acc, kind, body, a.deps.now())
     return Response(status_code=204)

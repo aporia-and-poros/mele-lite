@@ -47,9 +47,9 @@
 	<key>NSFaceIDUsageDescription</key>
 	<string>打开隐私相册和上锁的抽屉时验证是你。</string>
 	<key>NSHealthShareUsageDescription</key>
-	<string>首页健康小组件显示步数、距离、活动消耗、睡眠、心率；你打开「步数和睡眠」后，TA 聊天时知道你今天走了多少、昨晚睡了多久（只读）。</string>
+	<string>首页健康小组件显示步数、距离、活动消耗、睡眠、心率；你打开「步数和睡眠」后，TA 聊天时知道你今天走了多少、昨晚睡了多久；经期页读你在「健康」里记过的月经日期。</string>
 	<key>NSHealthUpdateUsageDescription</key>
-	<string>Mele Lite 不会往「健康」里写任何数据，只读步数、睡眠等给首页小组件看。</string>
+	<string>你打开经期页的「同步苹果健康」后，在 Mele 里记的月经流量会存一份到「健康」，其他数据不写。</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>连你自己在家里电脑上部署的记忆库（MCP 服务）。</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
@@ -65,6 +65,10 @@
 	<key>UIAppFonts</key>
 	<array>
 		<string>Ballet.ttf</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>chat.mele.app.reply.*</string>
 	</array>
 	<key>UIBackgroundModes</key>
 	<array>

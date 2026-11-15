@@ -120,3 +120,11 @@ def test_offline_base_does_not_pin_them_to_a_phone():
     assert "住在手机 app 里" in on and "住在手机 app 里" not in off
     assert "是见面还是隔着屏幕，照人设里的场景和你们的对话来" in off and "露骨的性内容不写" in off
     assert "living in a phone app" not in render_base(FACTORY["en"], [], "en", chat_rules=False)
+
+
+def test_imported_persona_keeps_what_to_call_user():
+    """导了卡也认「TA 怎么叫你」（11-12，跟 Lite 本机一样）；没填就不多一行"""
+    text = render_base(Persona.from_dict({"imported": "你是一只会说话的猫。", "call_user": "小满"}, "zh"), [], "zh")
+    assert "你是一只会说话的猫。" in text and "小满" in text
+    plain = render_base(Persona.from_dict({"imported": "你是一只会说话的猫。"}, "zh"), [], "zh")
+    assert "小满" not in plain

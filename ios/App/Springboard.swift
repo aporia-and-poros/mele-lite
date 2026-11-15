@@ -6,6 +6,7 @@ import SwiftUI
 enum HomeApp: String, CaseIterable, Codable {
     case messages, me, food, music, lore, people, todo, stickers, wallet, books, tarot, calendar, moments
     case drawer, diary, album, favorites, record, offline, wakes, focus
+    case cycle      // 经期（11-15 Aporia：上架前最后一个功能）
     case memory     // 记忆库（10-04 Aporia）：用户自己部署的 mele-memory 网页，手机版；没接就灰着带锁
 
     var title: String {
@@ -17,6 +18,7 @@ enum HomeApp: String, CaseIterable, Codable {
         case .lore: String(localized: "世界书")
         case .people: String(localized: "人物卡")
         case .todo: String(localized: "待办")
+        case .cycle: String(localized: "经期")
         case .stickers: String(localized: "表情包")
         case .wallet: String(localized: "钱包")
         case .books: String(localized: "书架")
@@ -44,6 +46,7 @@ enum HomeApp: String, CaseIterable, Codable {
         case .lore: "book.closed.fill"
         case .people: "person.crop.rectangle.stack.fill"
         case .todo: "checklist"
+        case .cycle: "drop.fill"
         case .stickers: "face.smiling.inverse"
         case .wallet: "wallet.pass.fill"
         case .books: "books.vertical.fill"
@@ -112,6 +115,16 @@ enum HomeLayout {
                 save(s)
             }
         }
+        // 经期 11-15 才有：以前存的排法里没有，放到第一页末尾（只补一次，TA 删了就不再补）
+        if !UserDefaults.standard.bool(forKey: "springboard.cycleAdded") {
+            UserDefaults.standard.set(true, forKey: "springboard.cycleAdded")
+            let shown = Set(s.pages.flatMap { $0.compactMap(\.app) } + s.dock)
+            if !shown.contains(.cycle) {
+                if s.pages.isEmpty { s.pages = [[]] }
+                s.pages[0].append(HomeItem(app: .cycle))
+                save(s)
+            }
+        }
         return s
     }
 
@@ -123,7 +136,7 @@ enum HomeLayout {
         func a(_ x: HomeApp) -> HomeItem { HomeItem(app: x) }
         func w(_ k: WidgetKind, _ s: WidgetSize = .small) -> HomeItem { HomeItem(widget: WidgetSlot(kind: k, size: s)) }
         var p1: [HomeItem] = [w(.chat, .medium), w(.days), w(.drawer)]
-        p1 += [.food, .todo, .wallet, .calendar, .moments, .stickers, .lore, .people].map(a)
+        p1 += [.food, .todo, .cycle, .wallet, .calendar, .moments, .stickers, .lore, .people].map(a)
         var p2: [HomeItem] = [w(.pegboard, .large)]
         p2 += [.album, .favorites, .record, .drawer, .offline].map(a)
         var p3: [HomeItem] = [.music, .books, .tarot].map(a)
@@ -707,6 +720,7 @@ struct Springboard: View {
         case .lore: post(.lumiOpenLore)
         case .people: post(.lumiOpenPeople)
         case .todo: post(.lumiOpenTodo)
+        case .cycle: post(.lumiOpenCycle)
         case .stickers: post(.lumiOpenStickers)
         case .wallet: post(.lumiOpenWallet)
         case .books: post(.lumiOpenBooks)

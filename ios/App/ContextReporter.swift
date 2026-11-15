@@ -70,6 +70,7 @@ final class ContextReporter: NSObject, ObservableObject, CLLocationManagerDelega
         }
         Task { for k in Kind.allCases where enabled.contains(k) { await report(k, force: false) } }
         reportMusicNow()
+        Task { await CycleStore.shared.importHealth(); await CycleStore.shared.report(); await CycleStore.shared.reschedule() }   // 经期（11-15）
     }
 
     /// 报一次「音乐」在放什么、放到第几秒（连了 Apple Music、授权过的才报；09-30）。

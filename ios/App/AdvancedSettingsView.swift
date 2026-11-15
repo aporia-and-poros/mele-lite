@@ -214,7 +214,7 @@ struct AdvancedSettingsView: View {
 
             Tile {
                 VStack(alignment: .leading, spacing: 6) {
-                    row("导入人设", "贴一整份人设进来，替换出厂的性格")
+                    row("导入人设", "贴一整份人设进来。有它的时候，性格、说话方式和温暖 · 主动 · 幽默都不用，只照这份来；清空就回到性格")
                     DraftTextEditor(text: store.p("imported", ""))
                         .font(Typo.sans(Typo.Size.callout)).frame(minHeight: 90).scrollContentBackground(.hidden)
                 }

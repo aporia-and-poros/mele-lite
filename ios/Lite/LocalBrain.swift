@@ -29,7 +29,42 @@ final class LocalBrain: @unchecked Sendable {
     /// 这一轮跑到一半被手机挂起、回来才写完的窗口（10-20）：回复作废，外面那层负责重来
     private var staleConvs: Set<String> = []
 
-    init(host: LocalHost) { self.host = host }
+    init(host: LocalHost) {
+        self.host = host
+        // 11-13 内测「发完就退出没有通知」：一切走，① 不再等「等你说完」，马上回；② 还有话没回完的窗口向苹果要「接着做完」的时间
+        // ② 要在还没进后台时要（进了后台再要，苹果回 unavailable）：划走那一下先是 willResignActive
+        NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self, #available(iOS 26, *) else { return }
+            for conv in self.unfinished() { ReplyContinuation.shared.start(conv, name: self.displayName(conv)) }
+        }
+        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.leftApp()
+        }
+    }
+
+    /// 还有话没回完的窗口：排着的、或者正在回
+    private func unfinished() -> [String] {
+        lock.withLock { rooms.filter { !$0.value.pending.isEmpty || !$0.value.files.isEmpty || $0.value.running != nil }.map(\.key) }
+    }
+
+    private func leftApp() {
+        for conv in unfinished() {
+            let r = room(conv)
+            let now = lock.withLock { () -> Bool in
+                guard r.timer != nil, r.running == nil else { return false }   // 正在回的：回完 flush 会接着把新的一起回
+                r.timer?.cancel(); r.timer = nil
+                return true
+            }
+            if now { flush(conv) }
+        }
+    }
+
+    /// 锁屏进度条上的名字：私聊是 TA 的名字，群是群名
+    private func displayName(_ conv: String) -> String {
+        if let g = LocalGroups.group(host.store, conv), let n = g["name"] as? String { return n }
+        let p = host.companion(ofConversation: conv)?["persona"] as? [String: Any]
+        return p?["name"] as? String ?? "Mele"
+    }
 
     // MARK: 切后台（10-05 夜Aporia：回完消息切走，TA 的回复也要出来）
     // 发了话就向苹果多要一段后台时间（大约 30 秒），撑过「等 TA 说完」和它想、说的这一轮；这一轮跑完、没有下一轮了再还回去。
@@ -51,6 +86,7 @@ final class LocalBrain: @unchecked Sendable {
 
     private func letGo(_ conv: String) {
         DispatchQueue.main.async { [self] in
+            if #available(iOS 26, *) { ReplyContinuation.shared.finish(conv) }
             guard let id = lock.withLock({ graceIDs.removeValue(forKey: conv) }) else { return }
             UIApplication.shared.endBackgroundTask(id)
         }
@@ -109,6 +145,7 @@ final class LocalBrain: @unchecked Sendable {
         let r = room(conv)
         let all = lock.withLock { Array(r.listeners.values) }
         for c in all { c.yield(line) }
+        if #available(iOS 26, *) { ReplyContinuation.shared.step(conv, ev["type"] as? String) }
     }
 
     func busy(_ conv: String) -> Bool {
@@ -737,7 +774,7 @@ final class LocalBrain: @unchecked Sendable {
         if altInfo == nil {
             let askedText = host.store.messages(conv).last { ($0["role"] as? String) == "user" }?["text"] as? String ?? ""
             let side = LocalContext.line(host.store, conversation: conv, zh: zh,
-                                         force: ContextReporter.asks(askedText))
+                                         force: ContextReporter.asks(askedText), companion: cidNow)
             if !side.isEmpty { req.context += "\n\n" + side }
         }
         // 〔现在〕它自己此刻在哪、在干嘛（它的一天；小号窗口也给——那是它自己的日子）

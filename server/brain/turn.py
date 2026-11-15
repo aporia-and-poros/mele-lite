@@ -649,7 +649,7 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
             if where_now:
                 before = [*before, where_now]
             await _safe(world.kick_day(deps, acc, comp, settings, now), None)
-        side = context_line.render(items, now, settings.tz, lang)
+        side = context_line.render(items, now, settings.tz, lang, companion=str(comp))
         if side and context_line.due(items, now, last_at=state.get("side_at"), last_key=state.get("side_key"),
                                      wake=bool(wake)):   # TA 那边：天气、在哪、日程、步数、快捷指令（09-28）；不是每轮都给
             before = [*before, side]

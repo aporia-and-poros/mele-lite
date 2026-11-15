@@ -521,7 +521,7 @@ struct CompanionSettingsView: View {
             // 从角色卡导入的设定（10-11 内测反馈：以前没有入口，删性格没用、卡那层一直在）
             if !((store.persona["imported"] as? String) ?? "").isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
-                    row("导入的卡", "从角色卡带来的设定，跟上面的性格一起生效。想改就改")
+                    row("导入的卡", "从角色卡带来的整份设定。有它的时候，上面的性格和温暖 · 主动 · 幽默都不用，只照这份来。想改就改，删掉就回到性格")
                     foldingEditor(store.p("imported", ""), open: $importedOpen)
                     Button("删掉卡设定", role: .destructive) {
                         store.p("imported", "").wrappedValue = ""

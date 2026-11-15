@@ -7,9 +7,10 @@ from datetime import datetime, timedelta
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-KINDS = ("weather", "place", "calendar", "health", "music", "shortcut")
+KINDS = ("weather", "place", "calendar", "health", "cycle", "music", "shortcut")
 MAX_AGE = {"weather": timedelta(hours=3), "place": timedelta(hours=3), "calendar": timedelta(hours=12),
-           "health": timedelta(hours=3), "shortcut": timedelta(hours=3), "music": timedelta(minutes=20)}
+           "health": timedelta(hours=3), "shortcut": timedelta(hours=3), "music": timedelta(minutes=20),
+           "cycle": timedelta(hours=36)}
 _HEAD = {"zh": "〔TA 那边〕", "en": "〔Their side〕"}
 # 不是每轮都给（09-28 Aporia：它每条思考链都在念天气和步数）：醒来的那轮、隔了两小时、换了地方 / 快捷指令报了新的一句，才给
 RESHOW = timedelta(hours=2)
@@ -102,7 +103,17 @@ def _music(d: dict, at: datetime, now: datetime, lang: str) -> str:
     return f"刚才在听{song}（{_ago(now - at, lang)}）" if lang == "zh" else f"was listening to {song} ({_ago(now - at, lang)})"
 
 
-def render(items: dict[str, tuple[dict, datetime]], now: datetime, tz: str, lang: str) -> str:
+def _cycle(d: dict, lang: str, companion: str | None) -> str:
+    """经期（11-15 Aporia）：手机算好两种语言的一句（第几天、流量、症状、心情 / 预计几天后来）。
+    share = main 时只给手机那会儿的主联系人（companion_id）；不知道是谁在聊（companion=None）就不给。"""
+    if d.get("share") == "main" and (companion is None or str(d.get("companion_id") or "").lower() != companion.lower()):
+        return ""
+    text = str(d.get("text_en" if lang != "zh" else "text_zh") or "").strip()[:200]
+    return text
+
+
+def render(items: dict[str, tuple[dict, datetime]], now: datetime, tz: str, lang: str,
+           companion: str | None = None) -> str:
     parts = []
     for kind in KINDS:
         if kind not in items:
@@ -120,6 +131,8 @@ def render(items: dict[str, tuple[dict, datetime]], now: datetime, tz: str, lang
             s = _health(data, lang)
         elif kind == "music":
             s = _music(data, at, now, lang)
+        elif kind == "cycle":
+            s = _cycle(data, lang, companion)
         else:
             text = str(data.get("text") or "").strip()[:200]
             s = (f"TA 的快捷指令：{text}（{_ago(now - at, lang)}）" if lang == "zh"
@@ -135,6 +148,8 @@ def moment_key(items: dict[str, tuple[dict, datetime]], now: datetime) -> str:
     """「TA 那边有没有变」只看在哪、快捷指令那句、刚才在听的歌（天气、步数一直在小变，不算）。
     正在放的歌不算：换歌由耳朵的〔在听〕管；放到第几秒每次都不一样，算进来就每轮都「变了」（09-30）。"""
     fresh = {k: items[k][0] for k in ("place", "music", "shortcut") if k in items and now - items[k][1] <= MAX_AGE[k]}
+    if "cycle" in items and now - items["cycle"][1] <= MAX_AGE["cycle"]:   # 经期：第几天 / 症状变了才算变（手机给的 key）
+        fresh["cycle"] = str(items["cycle"][0].get("key") or "")
     if "music" in fresh:
         m = fresh.pop("music")
         if not m.get("playing"):

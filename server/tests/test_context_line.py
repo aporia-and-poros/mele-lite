@@ -123,3 +123,19 @@ async def test_turn_skips_their_side_right_after(pool):
     await run_turn(e.deps, scope, "今天好累", emit)
     assert "〔TA 那边〕" in e.model.requests[0].messages[-1].text
     assert "〔TA 那边〕" not in e.model.requests[1].messages[-1].text
+
+
+def test_cycle_line_and_main_only():
+    """经期（11-15）：手机算好的一句；只给主联系人时别的联系人看不到；变了才算「有变化」"""
+    d = {"text_zh": "经期第 2 天，流量多，痛经、腰酸，心情低落", "text_en": "day 2 of her period",
+         "share": "all", "companion_id": "c1", "key": "2|heavy"}
+    items = {"cycle": (d, NOW - timedelta(hours=10))}
+    assert C.render(items, NOW, TZ, "zh") == "〔TA 那边〕经期第 2 天，流量多，痛经、腰酸，心情低落"
+    assert "day 2 of her period" in C.render(items, NOW, TZ, "en")
+    main = {"cycle": ({**d, "share": "main"}, NOW)}
+    assert C.render(main, NOW, TZ, "zh", companion="c1").endswith("经期第 2 天，流量多，痛经、腰酸，心情低落")
+    assert C.render(main, NOW, TZ, "zh", companion="c2") == ""
+    assert C.render(main, NOW, TZ, "zh") == ""
+    assert C.render({"cycle": (d, NOW - timedelta(hours=40))}, NOW, TZ, "zh") == ""   # 太旧不写
+    k1 = C.moment_key(items, NOW)
+    assert k1 != C.moment_key({"cycle": ({**d, "key": "3|medium"}, NOW)}, NOW)
