@@ -1218,10 +1218,18 @@ struct ChatView: View {
                         if mine, let t = item.translation, !t.isEmpty {
                             Text(t).font(Typo.sans(skin.size(Typo.Size.headline))).foregroundStyle(skin.bubbleInk(mine: mine))
                         }
-                        Text(mentionLit(RichText.render(item.quoteParsed?.body ?? item.text, size: skin.size(Typo.Size.headline),
+                        // TA 写的网页（11-16）：```html 那段换成一张能点开跑的卡片，不铺代码
+                        let shown = HTMLBlock.split(item.quoteParsed?.body ?? item.text)
+                        if !shown.rest.isEmpty || shown.pages.isEmpty {
+                        Text(mentionLit(RichText.render(shown.pages.isEmpty ? (item.quoteParsed?.body ?? item.text) : shown.rest,
+                                                        size: skin.size(Typo.Size.headline),
                                                         ink: skin.bubbleInk(mine: mine))))
                             .font(Typo.sans(skin.size(Typo.Size.headline)))
                             .foregroundStyle(skin.bubbleInk(mine: mine).opacity(mine && !(item.translation ?? "").isEmpty ? 0.72 : 1))
+                        }
+                        ForEach(shown.pages.indices, id: \.self) { i in
+                            HTMLCard(html: shown.pages[i], ink: skin.bubbleInk(mine: mine))
+                        }
                         if !mine, let t = item.translation, !t.isEmpty {
                             Text(t).font(Typo.sans(skin.size(Typo.Size.headline))).foregroundStyle(skin.bubbleInk(mine: mine).opacity(0.72))
                         }

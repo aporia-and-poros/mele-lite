@@ -6,3 +6,5 @@ out="$(mktemp -d)"
 trap 'rm -rf "$out"' EXIT
 swiftc -parse-as-library -swift-version 5 App/SendLine.swift tests/SendLineTests.swift -o "$out/send-line"
 "$out/send-line"
+swiftc -parse-as-library -swift-version 5 App/HTMLBlock.swift tests/HTMLBlockTests.swift -o "$out/html-block"
+"$out/html-block"
