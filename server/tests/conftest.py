@@ -73,3 +73,11 @@ def _billing_clock_at_peak(monkeypatch):
     from datetime import datetime, timezone
     import llm.catalog
     monkeypatch.setattr(llm.catalog, "_clock", lambda: datetime(2026, 10, 1, 2, 0, tzinfo=timezone.utc))
+
+
+_STAMP = __import__("re").compile(r"^(?:〔\d+月\d+日 周. \d\d:\d\d〕|\[\w{3} \d+ \w{3}, \d\d:\d\d\])\n")
+
+
+def unstamp(text: str) -> str:
+    """去掉历史里 TA 那句前面的时间标记（11-18 turn.stamp），老测试照原话比"""
+    return _STAMP.sub("", text)

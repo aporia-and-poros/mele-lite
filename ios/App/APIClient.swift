@@ -71,6 +71,10 @@ final class APIClient: @unchecked Sendable {
         if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         if let json {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            // 转不成 JSON 的（NaN、日期之类）系统会直接崩、try 接不住（11-18）：先查，不行就当普通错误抛
+            guard JSONSerialization.isValidJSONObject(json) else {
+                throw URLError(.cannotParseResponse, userInfo: [NSLocalizedDescriptionKey: "请求内容转不成 JSON：\(path)"])
+            }
             req.httpBody = try JSONSerialization.data(withJSONObject: json)
         }
         return req

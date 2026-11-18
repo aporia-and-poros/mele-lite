@@ -1,4 +1,4 @@
-from brain.bubbles import balance, sentences, split_reply, typing_delay
+from brain.bubbles import balance, fence_raw_html, sentences, split_reply, typing_delay
 
 
 def test_blank_lines_make_bubbles():
@@ -71,3 +71,15 @@ def test_code_block_and_list_stay_whole():
     assert split_reply(code, 6) == ["看这个：", "```python\nprint(1)\n\nprint(2)\n```", "好了"]
     items = "\n".join(f"- 第{i}条，这一条写得比较长比较长比较长比较长比较长比较长比较长比较长比较长。" for i in range(12))
     assert split_reply(items, 6) == [items]
+
+
+def test_raw_html_page_fenced_and_whole():
+    page = "<!DOCTYPE html>\n<html lang=\"zh\">\n<head><title>猜词</title></head>\n<body>" + "<p>猜错了范围会收窄！再来一次？</p>\n" * 20 + "</body>\n</html>"
+    out = split_reply("写好了，在下面。\n\n代码在下面，可以整段复制：\n\n" + page + "\n\n玩得开心！")
+    assert out == ["写好了，在下面。", "代码在下面，可以整段复制：", "```html\n" + page + "\n```", "玩得开心！"]
+
+
+def test_fenced_or_plain_untouched():
+    t = "看：\n\n```html\n<!doctype html><html><body>hi</body></html>\n```"
+    assert fence_raw_html(t) == t
+    assert fence_raw_html("我们聊聊 HTML 吧！") == "我们聊聊 HTML 吧！"

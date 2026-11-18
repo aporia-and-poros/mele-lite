@@ -259,19 +259,46 @@ TEXT_CALL_NOTE = {"zh": "（你刚才把工具调用写成了文字，替你调�
 TOOLS_HEAD = {"zh": "〔上一轮你用过：{}〕", "en": "〔Last turn you used: {}〕"}
 
 
-def history_msgs(stored: list[archive.StoredMsg], lang: str) -> tuple[list[Msg], str]:
+STAMP_GAP_MIN = 120
+_WEEK = {"zh": "一二三四五六日", "en": ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")}
+
+
+def stamp(prev_at: datetime | None, at: datetime | None, tz: str | None, lang: str) -> str:
+    """历史里 TA 那句前面的时间（11-18 内测：「AI 对时间感知不好」——只给了现在几点，以前每句是哪天说的它不知道，
+    昨天的「去吃饭了」当成刚才）。第一句、换了一天、或者跟上一句隔了两小时以上才标；只看这句和上一句，历史逐字节不变。"""
+    if at is None or not tz:
+        return ""
+    z = ZoneInfo(tz)
+    loc = at.astimezone(z)
+    if prev_at is not None:
+        p = prev_at.astimezone(z)
+        if p.date() == loc.date() and (at - prev_at).total_seconds() < STAMP_GAP_MIN * 60:
+            return ""
+    wd = loc.weekday()
+    if lang == "zh":
+        return f"〔{loc.month}月{loc.day}日 周{_WEEK['zh'][wd]} {loc:%H:%M}〕"
+    return f"[{_WEEK['en'][wd]} {loc.day} {loc:%b}, {loc:%H:%M}]"
+
+
+def history_msgs(stored: list[archive.StoredMsg], lang: str, tz: str | None = None) -> tuple[list[Msg], str]:
     """存档 → 历史。它说的话后面要是用过工具，就在紧接着的那句用户的话前面加一行〔上一轮你用过：…〕
     （09-27：它看不见以前的工具调用，每轮都以为还没记、又记一遍）。放在用户那一侧，它不容易学着在回话里写；
     每次都从存档原样生成，历史逐字节不变，缓存接得上。返回 (历史, 还没着落的那行)——最后一轮的那行给这一轮的用户话。"""
     sep = "、" if lang == "zh" else "; "
     out: list[Msg] = []
     pending = ""
+    prev_at = None
     for m in stored:
+        at = getattr(m, "created_at", None)
+        st = stamp(prev_at, at, tz, lang) if m.role in archive.USER_SIDE else ""
+        prev_at = at or prev_at
         if m.role in archive.USER_SIDE:
             # 双语气泡（10-15）：你那句翻好了就给它看翻好的那版
             said = bilingual.user_side(m.text, m.translations)
             if m.call and not m.call.get("end") and not m.call.get("ring"):   # 电话里说的（10-31）；挂断、未接那条正文就是纸条
                 said = call_speech.tag(lang) + said
+            if st:
+                said = f"{st}\n{said}"
             text = with_tools_note(pending, said)
             if out and out[-1].role == "user" and _silent_did(out[-1].text):   # 醒来没说话留的那条后面接着的：并成一段
                 out[-1] = replace(out[-1], text=f"{out[-1].text}\n\n{text}")
@@ -583,7 +610,7 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
     # 旧版本漏进正文的心里话（10-19）：回看历史前洗掉，不让 TA 照着自己漏过的样子学
     history = [replace(m, text=monologue.spoken_only(m.text, untagged, lang == "zh"))
                if m.role == "assistant" and group is None else m for m in history]
-    hist, tools_note = history_msgs(history, lang)
+    hist, tools_note = history_msgs(history, lang, settings.tz)
     user_text_now = with_tools_note(tools_note, wake or text_for_model)
     if group is None:                # 历史末尾已经是用户那侧（醒来没说话留的那条）：跟这一轮并成一段，不连着两条
         hist, user_text_now = fold_tail(hist, user_text_now)
@@ -727,7 +754,7 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
         if rolled and group is None:
             left = {m.id for m in await archive.unrolled(pool, conv)}
             history = [m for m in history if m.id < 0 or m.id in left]
-            hist, _ = history_msgs(history, lang)
+            hist, _ = history_msgs(history, lang, settings.tz)
             hist = fold_tail(hist, "")[0]
             parts = replace(parts, history=squash(hist) if merged_rooms else hist,
                             ledger=ledger.render_ledger(await archive.get_ledger(pool, conv), monologue.clean_samples(state.get("voice_samples", []), untagged, lang == "zh"),

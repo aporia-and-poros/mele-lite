@@ -1,5 +1,6 @@
 """打电话（10-31，Host）：切句、洗句、纸条（跟 Lite 零件包 CallSpeechTests 同一套）；/call/turn 边写边推句子、
 电话里不想事不写独白、你那句标〔电话〕；打断后存档只留念到的；挂断那行；合成转发 + 存档重听；通话记录。假模型、假声音。测试用小满。"""
+from conftest import unstamp
 import asyncio
 import json
 from uuid import UUID
@@ -124,7 +125,7 @@ async def test_history_marks_call_lines_and_cut(pool, tmp_path):
         await c.post(f"/conversations/{cid}/call/cut", json={"call_id": "call-1", "spoken": ["你好呀，我在。"]})
         await _turn(c, cid, "刚才说到哪了")
         texts = [m.text for m in e.model.requests[-1].messages]
-        assert any(x.startswith("〔电话〕喂") for x in texts)
+        assert any(unstamp(x).startswith("〔电话〕喂") for x in texts), texts
         assert any("你好呀，我在。——" in x and "被打断" in x for x in texts)
 
 

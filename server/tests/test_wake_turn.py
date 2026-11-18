@@ -1,4 +1,5 @@
 """大脑的醒来入口（巡逻第 4 步）：〔醒来〕、<silent>、钟的四个工具、倒回撤钟、账本只记一行。测试用小满。"""
+from conftest import unstamp
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -114,7 +115,7 @@ async def test_said_saves_wake_then_reply_and_next_turn_sees_it(pool):
     await go(deps, scope, "还行，过了")
     req = model.requests[1]
     assert [m.role for m in req.messages] == ["user", "assistant", "user"]
-    assert req.messages[0].text.startswith("〔醒来〕") and req.messages[1].text == "诶，面试怎么样了？"
+    assert unstamp(req.messages[0].text).startswith("〔醒来〕") and req.messages[1].text == "诶，面试怎么样了？"
 
 
 async def test_wake_error_is_not_pushed(pool):

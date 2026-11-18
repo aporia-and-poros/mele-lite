@@ -25,6 +25,16 @@ import Testing
         let out = Bubbles.split(p, cap: nil)
         #expect(out.count > 1 && out.joined(separator: " ") == p)
     }
+    @Test func rawHTMLPageGetsFencedAndStaysWhole() {
+        let page = "<!DOCTYPE html>\n<html lang=\"zh\">\n<head><title>猜词</title></head>\n<body>" + String(repeating: "<p>猜错了范围会收窄！再来一次？</p>\n", count: 20) + "</body>\n</html>"
+        let out = Bubbles.split("写好了，在下面。\n\n代码在下面，可以整段复制：\n\n" + page + "\n\n玩得开心！")
+        #expect(out == ["写好了，在下面。", "代码在下面，可以整段复制：", "```html\n" + page + "\n```", "玩得开心！"])
+    }
+    @Test func fencedHTMLUntouched() {
+        let t = "看：\n\n```html\n<!doctype html><html><body>hi</body></html>\n```"
+        #expect(Bubbles.fenceRawHTML(t) == t)
+        #expect(Bubbles.fenceRawHTML("我们聊聊 HTML 吧！") == "我们聊聊 HTML 吧！")
+    }
     @Test func offlineDoesNotSplit() {
         let p = String(repeating: "这是一句话，里面有一些字。", count: 30)
         #expect(Bubbles.split(p, offline: true) == [p])

@@ -164,3 +164,25 @@ def test_history_drops_leaked_silent():
             StoredMsg(3, "user", "回来了", "", t), StoredMsg(4, "assistant", "<silent>", "", t)]
     hist, _ = history_msgs(msgs, "zh")
     assert [m.text for m in hist] == ["我去洗澡", "去吧", "回来了", "<silent>"]
+
+
+def test_history_stamps_new_day_and_long_gaps():
+    # 11-18 内测：「AI 对时间感知不好」——历史里每句哪天说的它不知道。第一句、换天、隔两小时以上才在 TA 那句前标时间
+    from datetime import datetime, timedelta, timezone
+    from brain.archive import StoredMsg
+    from brain.turn import history_msgs
+    t = datetime(2026, 11, 17, 14, 0, tzinfo=timezone.utc)          # UTC+8 22:00 周二
+    msgs = [StoredMsg(1, "user", "我去吃饭了", "", t), StoredMsg(2, "assistant", "去吧", "", t + timedelta(minutes=1)),
+            StoredMsg(3, "user", "吃完了", "", t + timedelta(minutes=40)),
+            StoredMsg(4, "assistant", "好", "", t + timedelta(minutes=41)),
+            StoredMsg(5, "user", "早", "", t + timedelta(hours=11)),          # 第二天 09:00
+            StoredMsg(6, "user", "在吗", "", t + timedelta(hours=14))]        # 隔三小时
+    hist, _ = history_msgs(msgs, "zh", "Asia/Shanghai")
+    assert [m.text for m in hist] == ["〔11月17日 周二 22:00〕\n我去吃饭了", "去吧", "吃完了", "好",
+                                      "〔11月18日 周三 09:00〕\n早\n\n〔11月18日 周三 12:00〕\n在吗"] or \
+        [m.text for m in hist][:4] == ["〔11月17日 周二 22:00〕\n我去吃饭了", "去吧", "吃完了", "好"], [m.text for m in hist]
+    texts = "\n".join(m.text for m in hist)
+    assert "〔11月18日 周三 09:00〕\n早" in texts and "〔11月18日 周三 12:00〕\n在吗" in texts
+    en, _ = history_msgs(msgs[:1], "en", "Asia/Shanghai")
+    assert en[0].text == "[Tue 17 Nov, 22:00]\n我去吃饭了"
+    assert history_msgs(msgs, "zh")[0][0].text == "我去吃饭了"      # 不给时区就不标（老调用方）

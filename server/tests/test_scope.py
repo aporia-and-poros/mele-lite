@@ -1,4 +1,5 @@
 """三层分开以后：人物卡大家共享，记忆各记各的，聊天各窗口各的（Aporia 09-27 定的 D 方案）。"""
+from conftest import unstamp
 from datetime import datetime, timezone
 
 import pytest
@@ -99,7 +100,7 @@ async def test_incognito_does_not_know_them_and_leaves_no_trace(pool):
     assert await archive.unrolled(pool, inc.conversation) == []
     assert inc.conversation not in {c.id for c in await accounts.list_conversations(pool, acc, lumi)}
     await events(d, Scope(acc, lumi, w), "在吗")
-    assert [x.text for x in m.requests[4].messages[:2]] == ["我对芒果过敏", "记下啦"]            # 接着无痕之前聊
+    assert [unstamp(x.text) for x in m.requests[4].messages[:2]] == ["我对芒果过敏", "记下啦"]            # 接着无痕之前聊
 
 
 async def test_rewind_undoes_what_those_turns_wrote(pool):

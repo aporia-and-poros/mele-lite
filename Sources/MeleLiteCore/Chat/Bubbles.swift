@@ -118,7 +118,27 @@ public enum Bubbles {
         }
     }
 
+    private static let rawPageStart = try! NSRegularExpression(pattern: #"(?i)<!doctype\s+html|<html[\s>]"#)
+    private static let rawPageEnd = try! NSRegularExpression(pattern: #"(?i)</html\s*>"#)
+
+    /// 整页网页没套 ``` 就给它套上 ```html（11-18 内测：DeepSeek 直接吐 <!DOCTYPE html>，
+    /// 长段按句末切，在 <! 的感叹号处断成两条，卡片也认不出来）。已经有代码块的不动。跟服务器 fence_raw_html 同一份规则。
+    public static func fenceRawHTML(_ text: String) -> String {
+        guard !text.contains("```") else { return text }
+        let ns = text as NSString
+        let all = NSRange(location: 0, length: ns.length)
+        guard let start = rawPageStart.firstMatch(in: text, range: all)?.range.location else { return text }
+        let endMatch = rawPageEnd.matches(in: text, range: all).last
+        let end = endMatch.map { $0.range.location + $0.range.length } ?? ns.length
+        guard end > start else { return text }
+        let before = ns.substring(to: start).trimmingCharacters(in: .whitespacesAndNewlines)
+        let page = ns.substring(with: NSRange(location: start, length: end - start))
+        let after = ns.substring(from: end).trimmingCharacters(in: .whitespacesAndNewlines)
+        return [before, "```html\n\(page)\n```", after].filter { !$0.isEmpty }.joined(separator: "\n\n")
+    }
+
     public static func split(_ text: String, cap: Int? = 6, offline: Bool = false) -> [String] {
+        let text = fenceRawHTML(text)
         // 代码块里的空行不算分段（11-07，照服务器 bubbles.py）
         var paras: [String] = []
         for piece in text.split(separator: try! Regex(#"\n\s*\n"#), omittingEmptySubsequences: false).map(String.init) {

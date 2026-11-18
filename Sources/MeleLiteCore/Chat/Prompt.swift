@@ -98,14 +98,36 @@ public enum Prompt {
         return f.string(from: d)
     }
 
+    static let stampGap: TimeInterval = 2 * 3600
+
+    /// 历史里 TA 那句前面的时间（11-18 内测：「AI 对时间感知不好」——只给了现在几点，以前每句哪天说的它不知道，
+    /// 昨天的「去吃饭了」当成刚才）。第一句、换了一天、或者跟上一句隔了两小时以上才标；只看这句和上一句，历史逐字节不变。
+    /// 跟服务器 turn.stamp 同一个格式
+    static func stamp(prev: Date?, at: Date, _ tz: TimeZone, _ lang: Lang) -> String? {
+        var cal = Calendar(identifier: .gregorian); cal.timeZone = tz
+        if let prev, cal.isDate(prev, inSameDayAs: at), at.timeIntervalSince(prev) < stampGap { return nil }
+        let c = cal.dateComponents([.month, .day, .hour, .minute, .weekday], from: at)
+        let wd = ((c.weekday ?? 1) + 5) % 7                 // 周一 = 0
+        let hm = String(format: "%02d:%02d", c.hour ?? 0, c.minute ?? 0)
+        if lang == .zh { return "〔\(c.month ?? 0)月\(c.day ?? 0)日 周\(Array("一二三四五六日")[wd]) \(hm)〕" }
+        let mon = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][max(0, (c.month ?? 1) - 1)]
+        return "[\(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][wd]) \(c.day ?? 0) \(mon), \(hm)]"
+    }
+
     static func turns(_ i: PromptInput, budget: Int) -> [ChatTurn] {
         let byID = Dictionary(i.history.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         var merged: [ChatTurn] = []
-        for m in i.history {
+        var prevAt: Date?
+        for (n, m) in i.history.enumerated() {
             var text = m.text
             if let q = m.quoteOf, let orig = byID[q] {
                 text = (i.lang == .zh ? "（回复：\(orig.text.prefix(30))）\n" : "(Replying to: \(orig.text.prefix(30)))\n") + text
             }
+            // 最后一句是这一轮刚说的：隔了多久由 gapLine 说，这里不重复
+            if m.role == .user, n < i.history.count - 1, let st = stamp(prev: prevAt, at: m.at, i.timeZone, i.lang) {
+                text = st + "\n" + text
+            }
+            prevAt = m.at
             if let last = merged.last, last.role == m.role {
                 merged[merged.count - 1].text += "\n\n" + text
             } else {

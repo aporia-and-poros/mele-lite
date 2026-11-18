@@ -83,8 +83,8 @@ final class ContextReporter: NSObject, ObservableObject, CLLocationManagerDelega
             if onlyPlaying && !playing { return }
             Task { try? await api?.send("POST", "music/now", json: ["song_id": it.playbackStoreID, "name": title,
                                                                       "artist": it.artist ?? "", "playing": playing,
-                                                                      "position_s": p.currentPlaybackTime,
-                                                                      "duration_s": it.playbackDuration]) }
+                                                                      "position_s": Self.finite(p.currentPlaybackTime),
+                                                                      "duration_s": Self.finite(it.playbackDuration)]) }
             return
         }
         guard MusicAuthorization.currentStatus == .authorized, MusicStore.shared.appleLinked,
@@ -94,8 +94,11 @@ final class ContextReporter: NSObject, ObservableObject, CLLocationManagerDelega
         let position = SystemMusicPlayer.shared.playbackTime
         Task { try? await api?.send("POST", "music/now", json: ["song_id": s.id.rawValue, "name": s.title,
                                                                   "artist": s.artistName, "playing": playing,
-                                                                  "position_s": position]) }
+                                                                  "position_s": Self.finite(position)]) }
     }
+
+    /// 播放器没在放 / 刚切歌时给的秒数可能是 NaN（11-18：塞进 JSON 直接崩，第 81 版 10 次崩溃全是这个）
+    static func finite(_ t: TimeInterval) -> TimeInterval { t.isFinite ? t : 0 }
 
     func background() {
         activeTimer?.invalidate()

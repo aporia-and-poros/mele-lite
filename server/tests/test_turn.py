@@ -1,3 +1,4 @@
+from conftest import unstamp
 from datetime import date, datetime, timedelta, timezone
 
 import memory as M
@@ -66,7 +67,7 @@ async def test_history_keeps_raw_words_not_the_volatile_part(pool, user_a):
     await turn(d, user_a, "第一句")
     await turn(d, user_a, "第二句")
     second = m.requests[1]
-    assert [x.text for x in second.messages[:-1]] == ["第一句", "好"]
+    assert [unstamp(x.text) for x in second.messages[:-1]] == ["第一句", "好"]
     assert second.messages[1].cache is True
 
 

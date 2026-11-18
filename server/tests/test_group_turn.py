@@ -1,4 +1,5 @@
 """群聊里替某个 TA 跑一轮 + 私聊合别的房间（10-11）。测试用阿橘 / 小满。"""
+from conftest import unstamp
 from datetime import timedelta
 from uuid import uuid5
 
@@ -64,7 +65,7 @@ async def test_private_chat_sees_group_lines(pool):
     m = FakeModel(["〔群「三人行」〕嗯"])
     await run_turn(make_deps(pool, m), Scope(acc, ju, dm), "私聊来了", lambda e: _noop(e))
     texts = [x.text for x in m.requests[0].messages]
-    assert texts[0] == "〔群「三人行」 · 她〕群里一句\n\n〔群「三人行」 · 小满〕小满在群里说的"
+    assert unstamp(texts[0]) == "〔群「三人行」 · 她〕群里一句\n\n〔群「三人行」 · 小满〕小满在群里说的"
     # 10-31 内测：群里的话被接到私聊里回——告诉它现在在私聊；它学着垫的房间标签去掉
     assert "你现在在私聊" in "".join(b.text for b in m.requests[0].system)
     assert (await archive.recent(pool, dm, 5))[-1].text == "嗯"

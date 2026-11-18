@@ -104,7 +104,28 @@ def tidy_voice(text: str) -> str:
     return _BEFORE_MARK.sub(f"\n\n{VOICE}", _TAG_THEN_MARK.sub(f"{VOICE} \\1 ", text))
 
 
+_RAW_PAGE_START = re.compile(r"(?i)<!doctype\s+html|<html[\s>]")
+_RAW_PAGE_END = re.compile(r"(?i)</html\s*>")
+
+
+def fence_raw_html(text: str) -> str:
+    """整页网页没套 ``` 就给它套上 ```html（11-18 内测：DeepSeek 直接吐 <!DOCTYPE html>，
+    长段按句末切，在 <! 的感叹号处断成两条，卡片也认不出来）。已经有代码块的不动。"""
+    if not text or "```" in text:
+        return text
+    m = _RAW_PAGE_START.search(text)
+    if not m:
+        return text
+    ends = list(_RAW_PAGE_END.finditer(text))
+    end = ends[-1].end() if ends else len(text)
+    if end <= m.start():
+        return text
+    parts = [text[:m.start()].strip(), f"```html\n{text[m.start():end]}\n```", text[end:].strip()]
+    return "\n\n".join(p for p in parts if p)
+
+
 def split_reply(text: str, cap: int | None = 6, long_mode: bool = False) -> list[str]:
+    text = fence_raw_html(text)
     paras: list[str] = []
     for p in re.split(r"(\n\s*\n)", text or ""):
         if paras and paras[-1].count("```") % 2 == 1:   # 代码块里的空行不算分段（11-07）
