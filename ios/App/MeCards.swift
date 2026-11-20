@@ -98,7 +98,7 @@ struct ProfileCard: View {
             }
             VStack(alignment: .leading, spacing: 6) {
                 Hint(text: String(localized: "你长什么样（可以不写；写了 TA 们就知道）"))
-                TextEditor(text: $looks)
+                IMETextEditor(text: $looks, size: Typo.Size.callout)
                     .font(Typo.sans(Typo.Size.callout))
                     .frame(minHeight: 70)
                     .scrollContentBackground(.hidden)
@@ -245,7 +245,8 @@ struct KeychainCard: View {
 
     static func providerName(_ p: String) -> String {
         ["deepseek": "DeepSeek", "anthropic": "Claude", "openai": "OpenAI", "gemini": "Gemini",
-         "openai-compatible": String(localized: "兼容 OpenAI"), "elevenlabs": "ElevenLabs", "minimax": "MiniMax"][p] ?? p
+         "openai-compatible": String(localized: "兼容 OpenAI"), "siliconflow": String(localized: "硅基流动"),
+         "elevenlabs": "ElevenLabs", "minimax": "MiniMax"][p] ?? p
     }
 
     /// 只管声音的几家（不聊天、不选模型）
@@ -278,8 +279,12 @@ struct AddKeyView: View {
     @State private var picks: [String] = []         // 拉到的里面勾了哪几个：一个模型一把钥匙（10-11 内测反馈：多选）
     @State private var fetching = false
     @State private var fetchNote: String?
+    @State private var sfBase = AddKeyView.siliconFlowCN     // 硅基流动国内站 / 国际站：拉列表时认出 key 是哪边的
 
-    private let providers = ["deepseek", "anthropic", "openai", "gemini", "openai-compatible", "elevenlabs", "minimax"]
+    /// 硅基流动（11-20 内测：要用 DeepSeek-V3.2 这些老模型）：其实就是「兼容 OpenAI」+ 填好的地址，存的时候也存成兼容 OpenAI
+    static let siliconFlowCN = "https://api.siliconflow.cn/v1"
+    static let siliconFlowIntl = "https://api.siliconflow.com/v1"
+    private let providers = ["deepseek", "anthropic", "openai", "gemini", "siliconflow", "openai-compatible", "elevenlabs", "minimax"]
 
     var body: some View {
         NavigationStack {
@@ -305,6 +310,9 @@ struct AddKeyView: View {
                         #else
                         Text("key 加密存在服务器上，谁都看不到原文；这里只显示后 4 位。")
                         #endif
+                        if provider == "siliconflow" {
+                            Text("贴上 key，点下面「拉取这家的模型列表」，勾上想用的（比如 deepseek-ai/DeepSeek-V3.2）。国内站、国际站的 key 都行。")
+                        }
                         if provider == "minimax" {
                             Text("MiniMax 只管声音（语音条、念给我听、电话、听你的语音）。国内版（minimaxi.com）、国际版（minimax.io）的 key 都行，会自己认出来。")
                         }
@@ -418,15 +426,27 @@ struct AddKeyView: View {
             req.setValue(key, forHTTPHeaderField: "x-goog-api-key")
         default:
             var base = provider == "openai" ? "https://api.openai.com/v1"
-                : provider == "deepseek" ? "https://api.deepseek.com" : baseURL.trimmingCharacters(in: .whitespaces)
+                : provider == "deepseek" ? "https://api.deepseek.com"
+                : provider == "siliconflow" ? Self.siliconFlowCN : baseURL.trimmingCharacters(in: .whitespaces)
             while base.hasSuffix("/") { base.removeLast() }
-            guard let url = URL(string: base + "/models") else { fetchNote = String(localized: "地址不对"); return }
+            let only = provider == "siliconflow" ? "?type=text&sub_type=chat" : ""     // 硅基流动的列表里画图、语音、向量一大堆，只要聊天的
+            guard let url = URL(string: base + "/models" + only) else { fetchNote = String(localized: "地址不对"); return }
             req = URLRequest(url: url, timeoutInterval: 15)
             req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         }
         do {
-            let (data, resp) = try await URLSession.shared.data(for: req)
-            let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            var (data, resp) = try await URLSession.shared.data(for: req)
+            var status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            if provider == "siliconflow" {
+                sfBase = Self.siliconFlowCN
+                if status == 401 || status == 403,                                         // 国内站不认：试国际站
+                   let u = URL(string: Self.siliconFlowIntl + "/models?type=text&sub_type=chat") {
+                    req.url = u
+                    (data, resp) = try await URLSession.shared.data(for: req)
+                    status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+                    if status == 200 { sfBase = Self.siliconFlowIntl }
+                }
+            }
             let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
             var ids: [String] = []
             if let list = obj?["data"] as? [[String: Any]] {                       // OpenAI / DeepSeek / Claude / 兼容
@@ -478,9 +498,10 @@ struct AddKeyView: View {
         defer { trying = false }
         var first: String?
         for m in pickedModels {
-            var body: [String: Any] = ["provider": provider, "api_key": apiKey.trimmingCharacters(in: .whitespacesAndNewlines),
-                                       "chat_model": m]
+            var body: [String: Any] = ["provider": provider == "siliconflow" ? "openai-compatible" : provider,
+                                       "api_key": apiKey.trimmingCharacters(in: .whitespacesAndNewlines), "chat_model": m]
             if provider == "openai-compatible" { body["base_url"] = baseURL.trimmingCharacters(in: .whitespaces) }
+            if provider == "siliconflow" { body["base_url"] = sfBase }
             if provider == "anthropic", let relay = Self.claudeBase(baseURL) { body["base_url"] = relay }   // 中转站的 Claude（11-03）
             do {
                 let k: KeyDTO = try await model.api.call("POST", "keys", json: body)

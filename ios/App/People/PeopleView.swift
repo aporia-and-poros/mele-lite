@@ -179,7 +179,7 @@ struct PersonEditView: View {
                     TextField(String(localized: "是谁，比如：大学室友"), text: $relation)
                 }
                 Section(String(localized: "要记得")) {
-                    TextEditor(text: $facts).frame(minHeight: 90)
+                    IMETextEditor(text: $facts).frame(minHeight: 90)
                 }
                 if separateImpressions {
                     // 每个 TA 各记各的：只有它自己那句会递给它（10-12 内测：原来一栏大家共用，别人的看法被当成自己的）
@@ -188,7 +188,7 @@ struct PersonEditView: View {
                             let key = c.id.uuidString.lowercased()
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(c.name).font(Typo.sans(Typo.Size.caption)).foregroundStyle(.secondary)
-                                TextEditor(text: Binding(get: { perTA[key] ?? "" }, set: { perTA[key] = $0 })).frame(minHeight: 50)
+                                IMETextEditor(text: Binding(get: { perTA[key] ?? "" }, set: { perTA[key] = $0 })).frame(minHeight: 50)
                             }
                         }
                     } header: {
@@ -198,7 +198,7 @@ struct PersonEditView: View {
                     }
                 } else {
                     Section {
-                        TextEditor(text: $impression).frame(minHeight: 70)
+                        IMETextEditor(text: $impression).frame(minHeight: 70)
                     } header: {
                         Text(String(localized: "Ta 的印象"))
                     } footer: {

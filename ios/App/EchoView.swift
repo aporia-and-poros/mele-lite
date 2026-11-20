@@ -80,7 +80,7 @@ struct EchoView: View {
             }
             .buttonStyle(.plain)
             if isOpen {
-                TextEditor(text: Binding(get: { drafts[key] ?? text }, set: { drafts[key] = $0 }))
+                IMETextEditor(text: Binding(get: { drafts[key] ?? text }, set: { drafts[key] = $0 }), size: Typo.Size.body)
                     .font(Typo.sans(Typo.Size.body))
                     .scrollContentBackground(.hidden)
                     .frame(minHeight: 140)

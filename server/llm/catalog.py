@@ -50,10 +50,16 @@ DEFAULT_HIGH_WATER = 60_000
 SEES_IMAGES = ("anthropic", "openai", "gemini")     # 这几家的聊天模型都能直接看图；DeepSeek 不算
 
 
-def sees_images(provider: str, base_url: str | None = None) -> bool:
-    """中转站（10-26 内测「Lite 里 GPT 能看图、搬到 Host 看不了」）：跟 Lite 一样默认当它看得见，地址是 DeepSeek 的才不算"""
+def text_only_model(model: str | None) -> bool:
+    """中转站上的 DeepSeek（11-20 内测：硅基流动 deepseek-ai/DeepSeek-V3.2）只认字，发图过去直接报错；DeepSeek 的 VL / OCR 才看得见"""
+    m = (model or "").lower()
+    return "deepseek" in m and not any(t in m for t in ("vl", "ocr", "janus"))
+
+
+def sees_images(provider: str, base_url: str | None = None, model: str | None = None) -> bool:
+    """中转站（10-26 内测「Lite 里 GPT 能看图、搬到 Host 看不了」）：跟 Lite 一样默认当它看得见，地址是 DeepSeek 的、模型是 DeepSeek 的才不算"""
     if provider == "openai-compatible":
-        return "deepseek" not in (base_url or "").lower()
+        return "deepseek" not in (base_url or "").lower() and not text_only_model(model)
     return provider in SEES_IMAGES
 
 

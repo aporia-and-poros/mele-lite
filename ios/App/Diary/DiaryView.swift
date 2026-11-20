@@ -272,7 +272,7 @@ struct DiaryEditor: View {
             Form {
                 DatePicker("哪天", selection: $day, in: ...Date(), displayedComponents: .date)
                 Section {
-                    TextEditor(text: $text)
+                    IMETextEditor(text: $text, size: Typo.Size.body)
                         .frame(minHeight: 260)
                         .font(Typo.sans(Typo.Size.body))
                 }

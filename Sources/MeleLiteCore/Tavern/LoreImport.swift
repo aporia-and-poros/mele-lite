@@ -57,6 +57,54 @@ public enum LoreImport {
 
     static func dropBOM(_ s: String) -> String { s.hasPrefix("\u{FEFF}") ? String(s.dropFirst()) : s }
 
+    // MARK: 整份导入（11-19 内测：一份完整设定不想被拆成词条，拆完每段都没关键词 → 读到 0 条）
+
+    /// 整份当「一直记着的」：一条最多 2000 字，长的按段落切成几块（一段本身太长就硬切），
+    /// 标题「文件名 1/3」，关键词用文件名（存的时候至少要一个）
+    public static func whole(_ text: String, fileName: String, charName: String, userName: String,
+                             lang: Lang) -> [LoreEntry] {
+        let zh = lang == .zh
+        let user = userName.isEmpty ? (zh ? "你" : "you") : userName
+        let body = CardParser.fill(dropBOM(text).replacingOccurrences(of: "\r\n", with: "\n"), char: charName, user: user)
+        guard !body.isEmpty else { return [] }
+        let chunks = split(body, max: 2000)
+        var base = cleanTitle((fileName as NSString).deletingPathExtension)
+        if base.isEmpty { base = zh ? "设定" : "Setting" }
+        base = String(base.prefix(32))
+        let key = CardParser.keywordOK(base) ? base : (zh ? "设定" : "Setting")
+        return chunks.enumerated().map { i, c in
+            LoreEntry(title: chunks.count == 1 ? base : "\(base) \(i + 1)/\(chunks.count)", keys: [key], content: c, constant: true)
+        }
+    }
+
+    /// 按行攒，攒满 max 就切；切口尽量落在空行（段落）上
+    static func split(_ text: String, max: Int) -> [String] {
+        var out: [String] = [], cur = ""
+        func flush() {
+            let t = cur.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !t.isEmpty { out.append(t) }
+            cur = ""
+        }
+        for var line in text.components(separatedBy: "\n") {
+            while line.count > max {                             // 一行就超了：硬切
+                flush()
+                out.append(String(line.prefix(max)))
+                line = String(line.dropFirst(max))
+            }
+            if cur.count + line.count + 1 > max {
+                // 先退回到这一块里最后一个空行，后半截带进下一块，免得把一段从中间切开
+                if let r = cur.range(of: "\n\n", options: .backwards), cur.distance(from: cur.startIndex, to: r.lowerBound) > max / 2 {
+                    let tail = String(cur[r.upperBound...])
+                    cur = String(cur[..<r.lowerBound]); flush(); cur = tail
+                }
+                if cur.count + line.count + 1 > max { flush() }
+            }
+            cur += cur.isEmpty ? line : "\n" + line
+        }
+        flush()
+        return out
+    }
+
     // MARK: JSON
 
     /// 酒馆世界书 {entries: {"0": {...}}}、character_book {entries: [...]}、整张卡、或者直接一个数组

@@ -256,7 +256,7 @@ struct LoreEditView: View {
                     Text(String(localized: "说到这些词的时候，它就会想起这一条。"))
                 }
                 Section(String(localized: "内容")) {
-                    TextEditor(text: $content).frame(minHeight: 140)
+                    IMETextEditor(text: $content).frame(minHeight: 140)
                 }
                 Section {
                     Picker(String(localized: "给谁"), selection: $forWho) {

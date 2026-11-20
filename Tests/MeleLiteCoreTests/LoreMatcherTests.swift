@@ -43,4 +43,12 @@ private func msgs(_ texts: String...) -> [Message] { texts.map { Message(role: .
         let text = (0..<12).map { "词\($0)" }.joined(separator: " ")
         #expect(LoreMatcher.hits(entries: many, recent: msgs(text), contactID: "c").count == 8)
     }
+
+    @Test func constantsDontCountTowardMax() {
+        let parts = (0..<10).map { LoreEntry(title: "设定 \($0)", keys: ["设定"], content: "第\($0)块", constant: true) }
+        let many = (0..<12).map { LoreEntry(title: "\($0)", keys: ["词\($0)"], content: "") }
+        let text = (0..<12).map { "词\($0)" }.joined(separator: " ")
+        let got = LoreMatcher.hits(entries: parts + many, recent: msgs(text), contactID: "c")
+        #expect(got.filter(\.constant).count == 10 && got.filter { !$0.constant }.count == 8)
+    }
 }

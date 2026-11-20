@@ -280,6 +280,7 @@ struct CompanionSettingsView: View {
     @State private var personalityOpen = false   // 性格 / 导入的卡太长默认收起（10-20 内测：设定太长，每次要划很久才到下面的开关）
     @State private var importedOpen = false
     @State private var customRel = ""
+    @State private var customLen = ""          // 记性长度自己填（11-20 内测：只有短中长三档）
     @State private var writingOwn = false       // 出厂性格清空了、正在自己写
     @State private var wechatDraft = ""         // 微信号先在本地编辑，合法才存（10-11）
     @State private var wechatNote: String?
@@ -349,7 +350,10 @@ struct CompanionSettingsView: View {
             }
         }
         .environment(\.colorScheme, .light)
-        .task { await store.load(); customRel = customRelationship }
+        .task {
+            await store.load(); customRel = customRelationship
+            if let v = store.settings["memory_length"] as? Int, !Self.lengthPresets.contains(v) { customLen = String(v) }
+        }
         .sheet(item: $chatFile) { f in ActivityView(items: [f.url]) }
         .sheet(isPresented: $addingClock) {
             AddClockView { shape, spec, note in Task { await store.addClock(shape: shape, spec: spec, note: note) } }
@@ -592,6 +596,8 @@ struct CompanionSettingsView: View {
         }
     }
 
+    static let lengthPresets = [10_000, 30_000, 60_000]
+
     private var customRelationship: String {
         let r = store.settings["relationship"] as? String ?? ""
         return ["", "friend", "partner", "family", "buddy", "card"].contains(r) ? "" : r
@@ -614,6 +620,13 @@ struct CompanionSettingsView: View {
             TextField("或者自己写，比如：饭搭子", text: $customRel)
                 .font(Typo.sans(Typo.Size.body))
                 .onSubmit { store.setNow(settings: ["relationship": customRel.trimmingCharacters(in: .whitespaces)]) }
+                // 11-20 内测：自己写完直接点右上「完成」不按回车，原来就没存上。改成边打边记
+                .onChange(of: customRel) { _, v in
+                    let t = v.trimmingCharacters(in: .whitespaces)
+                    let cur = store.settings["relationship"] as? String ?? ""
+                    if !t.isEmpty { if t != cur { store.setNow(settings: ["relationship": t]) } }
+                    else if !customRelationship.isEmpty { store.setNow(settings: ["relationship": ""]) }   // 清空自己写的；点圆片清的不动
+                }
         }
     }
 
@@ -729,12 +742,28 @@ struct CompanionSettingsView: View {
             Group {
                 if linked { recallPicker } else { recallPicker.needsHost(note: false) }
             }
-            RowPicker(selection: store.optionalInt("memory_length")) {
+            let len = store.optionalInt("memory_length")
+            let own = len.wrappedValue.flatMap { Self.lengthPresets.contains($0) ? nil : $0 }
+            RowPicker(selection: Binding(get: { len.wrappedValue }, set: { customLen = ""; len.wrappedValue = $0 })) {
                 Text("跟模型").tag(Int?.none)
                 Text("短 · 1 万").tag(Int?.some(10_000))
                 Text("中 · 3 万").tag(Int?.some(30_000))
                 Text("长 · 6 万").tag(Int?.some(60_000))
+                if let own { Text("自己填 · \(own)").tag(Int?.some(own)) }
             } label: { row("记性长度", "原话留多长再卷进账本。越长越贵") }
+            TextField("或者自己填 token 数，比如 80000", text: $customLen)
+                .font(Typo.sans(Typo.Size.body))
+                .keyboardType(.numberPad)
+                .onChange(of: customLen) { _, v in
+                    let digits = v.filter(\.isNumber)
+                    if digits != v { customLen = digits; return }
+                    guard let n = Int(digits), n >= 2_000 else { return }          // 打到一半（比如 8）先不存
+                    let clamped = min(n, 1_000_000)
+                    if len.wrappedValue != clamped { len.wrappedValue = clamped }
+                }
+            if !customLen.isEmpty, (Int(customLen) ?? 0) < 2_000 {
+                note(String(localized: "至少 2000"))
+            }
             // 一段脑子（10-11 群聊）：私聊和群里的事按时间穿插进来；只按条数，不限时间（本机和 Host 都有）
             if Lite.on {
                 let n = store.s("other_rooms_count", 30)
@@ -1004,12 +1033,13 @@ struct AddDateView: View {
 /// 直接绑设定的话，每敲一个字整页设定都要重画一遍，字一多就卡。外面改了（看出厂的、导入）照样跟上。
 struct DraftTextEditor: View {
     @Binding var text: String
+    var size: CGFloat = Typo.Size.callout
     @State private var draft = ""
     @State private var ready = false
     @State private var commit: Task<Void, Never>?
 
     var body: some View {
-        TextEditor(text: $draft)
+        IMETextEditor(text: $draft, size: size)      // 拼音选字时不被打断（11-20）
             .onAppear {
                 if !ready { draft = text; ready = true }
             }

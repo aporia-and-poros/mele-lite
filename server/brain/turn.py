@@ -554,7 +554,7 @@ async def run_turn(deps: Deps, scope: Scope | UUID, text: str, emit: Emit, *, re
             if f.kind == "image":
                 await _safe(vision.describe(deps, scope, route, f, lang, day, lambda r: get_adapter(deps, r)), "")
         text_for_model = "\n".join([text, *(files.note(f, lang) for f in sent)]).strip()
-        if sees_images(route.provider, route.base_url):
+        if sees_images(route.provider, route.base_url, route.chat_model):
             images = tuple(ImagePart(f.mime, base64.b64encode(Path(f.path).read_bytes()).decode())
                            for f in sent if f.kind == "image" and not f.sticker_id)   # 表情包只给描述（10-01）
     last_assistant = next((m.text for m in reversed(history) if m.role == "assistant"), "")

@@ -176,7 +176,7 @@ struct AdvancedSettingsView: View {
                                 .font(Typo.sans(Typo.Size.body, .semibold))
                             Toggle("", isOn: injBinding(i, "enabled", true)).labelsHidden()
                         }
-                        TextEditor(text: injBinding(i, "text", ""))
+                        IMETextEditor(text: injBinding(i, "text", ""), size: Typo.Size.callout)
                             .font(Typo.sans(Typo.Size.callout)).frame(minHeight: 60).scrollContentBackground(.hidden)
                         Picker("什么时候塞", selection: injBinding(i, "mode", "every")) {
                             Text("每轮").tag("every")

@@ -35,7 +35,7 @@ PROMPT = {
 
 
 async def _describer(deps, scope, chat_route: Route) -> tuple[Route | None, str]:
-    if sees_images(chat_route.provider, chat_route.base_url):
+    if sees_images(chat_route.provider, chat_route.base_url, chat_route.chat_model):
         return chat_route, "chat"
     box = getattr(deps.keys, "box", None)
     from . import media

@@ -115,4 +115,27 @@ import Testing
         // 编号行太少就照旧按空行分段
         #expect(try LoreImport.parse(Data("1. 灯塔\n北边\n\n2. 雾港\n南边".utf8), fileName: "w.txt", charName: "", userName: "", lang: .zh).entries.count == 2)
     }
+
+    // 11-19：整份导入——每段第一行都是长句、没写关键词，拆的话一条都读不到
+    @Test func wholeFile() throws {
+        let para = "这座城市叫雾港，常年起雾，{{user}}小时候在这里长大，后来去了北边念书，再也没有回来过很多年。"
+        let txt = Array(repeating: para, count: 3).joined(separator: "\n\n")
+        #expect(try LoreImport.parse(Data(txt.utf8), fileName: "雾港设定.txt", charName: "", userName: "", lang: .zh).entries.isEmpty)
+        let one = LoreImport.whole(txt, fileName: "雾港设定.txt", charName: "", userName: "小满", lang: .zh)
+        #expect(one.count == 1 && one[0].title == "雾港设定" && one[0].keys == ["雾港设定"] && one[0].constant)
+        #expect(one[0].content.contains("小满小时候") && one[0].content.contains("\n\n"))
+
+        // 长的切块：每块 ≤ 2000，切口落在段落上，拼回去一个字不少
+        let long = (0..<60).map { "第\($0)段：" + String(repeating: "雾", count: 80) }.joined(separator: "\n\n")
+        let parts = LoreImport.whole(long, fileName: "w.txt", charName: "", userName: "", lang: .zh)
+        #expect(parts.count > 1 && parts.allSatisfy { $0.content.count <= 2000 && $0.constant })
+        #expect(parts.allSatisfy { $0.content.hasPrefix("第") })
+        #expect(parts[0].title == "w 1/\(parts.count)" && parts[0].keys == ["设定"])     // 「w」一个字母当不了关键词
+        #expect(parts.map(\.content).joined(separator: "\n\n") == long)
+
+        // 一行就超长：硬切
+        let line = String(repeating: "雾", count: 4500)
+        #expect(LoreImport.whole(line, fileName: "a.txt", charName: "", userName: "", lang: .zh).map(\.content.count) == [2000, 2000, 500])
+        #expect(LoreImport.whole(" \n ", fileName: "a.txt", charName: "", userName: "", lang: .zh).isEmpty)
+    }
 }

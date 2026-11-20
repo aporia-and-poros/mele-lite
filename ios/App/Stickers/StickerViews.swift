@@ -290,7 +290,7 @@ struct StickerRoomView: View {
     }
 }
 
-/// 点开一张：名字、它看到的描述（能改）、只给谁、删
+/// 点开一张：名字、TA 看到的描述（能改）、只给谁、删
 struct StickerEditor: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var theme: AppTheme
@@ -311,10 +311,10 @@ struct StickerEditor: View {
                 }
                 Section("名字") { TextField("可以不起", text: $name) }
                 Section {
-                    TextEditor(text: $caption).frame(minHeight: 90)
-                } header: { Text("它看到的样子") } footer: {
-                    Text(caption.isEmpty ? "还没有描述。图上有字会先把字认出来当描述；TA 的模型会看图的话过一会儿它会写一句（DeepSeek 不会看图）。你也可以自己写一句，比如「阴阳怪气」。"
-                                         : "它按这段描述找表情包；写得不对就改成你的意思（比如「阴阳怪气」）。")
+                    IMETextEditor(text: $caption).frame(minHeight: 90)
+                } header: { Text("TA 看到的样子") } footer: {
+                    Text(caption.isEmpty ? "还没有描述。图上有字会先把字认出来当描述；TA 的模型会看图的话，过一会儿 TA 会写一句（DeepSeek 不会看图）。你也可以自己写一句，比如「阴阳怪气」。"
+                                         : "TA 按这段描述找表情包；写得不对就改成你的意思（比如「阴阳怪气」）。")
                 }
                 Section {
                     ForEach(model.companions) { c in

@@ -5,14 +5,17 @@ public enum LoreMatcher {
     public static func hits(entries: [LoreEntry], recent: [Message], contactID: String,
                             scan: Int = 4, maxHits: Int = 8) -> [LoreEntry] {
         let haystack = normalize(recent.suffix(scan).map(\.text).joined(separator: "\n"))
-        var out: [LoreEntry] = []
+        // 常驻的不占 maxHits（11-19：整份导入切成好几块常驻，前 8 块把关键词那几条全挤掉了）
+        var out: [LoreEntry] = [], hit = 0
         for e in entries where e.enabled && (e.contactIDs == nil || e.contactIDs!.contains(contactID)) {
-            if e.constant || e.keys.contains(where: { k in
+            if e.constant { out.append(e); continue }
+            guard hit < maxHits else { continue }
+            if e.keys.contains(where: { k in
                 let n = normalize(k)
                 return !n.isEmpty && haystack.contains(n)
             }) {
                 out.append(e)
-                if out.count == maxHits { break }
+                hit += 1
             }
         }
         return out

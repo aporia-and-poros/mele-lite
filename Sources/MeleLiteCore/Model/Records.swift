@@ -22,8 +22,12 @@ public struct ProviderConfig: Codable, Equatable, Sendable {
     }
 
     /// 这家会不会看图（10-13：DeepSeek 不会，发图过去直接报错——表情包描述那条循环一错全停，谁的描述都没写）
+    /// 11-20 内测：中转站上的 DeepSeek（硅基流动 deepseek-ai/DeepSeek-V3.2）地址不带 deepseek，也只认字；DeepSeek 的 VL / OCR 才看得见
     public var seesImages: Bool {
-        guard kind == .openai, let host = URL(string: baseURL ?? "")?.host?.lowercased() else { return true }
+        guard kind == .openai else { return true }
+        let m = model.lowercased()
+        if m.contains("deepseek"), !["vl", "ocr", "janus"].contains(where: { m.contains($0) }) { return false }
+        guard let host = URL(string: baseURL ?? "")?.host?.lowercased() else { return true }
         return !host.contains("deepseek")
     }
 }

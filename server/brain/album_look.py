@@ -103,7 +103,7 @@ async def look_batch(deps, account, companion, photos: list[A.Photo], now: datet
     day = now.astimezone(ZoneInfo(s.tz)).date()
     note = photos[0].note
     images: tuple[ImagePart, ...] = ()
-    if sees_images(route.provider, route.base_url):
+    if sees_images(route.provider, route.base_url, route.chat_model):
         images = tuple(ImagePart("image/jpeg", base64.b64encode(Path(p.path).read_bytes()).decode()) for p in photos)
         how = "附在这条里" if zh else "attached in order"
     else:

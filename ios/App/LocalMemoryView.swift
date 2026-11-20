@@ -320,7 +320,7 @@ struct LocalMemoryEditView: View {
                     if !shelf.isHost {      // Host 上的记忆没有标题
                         TextField(String(localized: "一行标题（可以空着）"), text: $title)
                     }
-                    TextEditor(text: $content).frame(minHeight: 120)
+                    IMETextEditor(text: $content).frame(minHeight: 120)
                 }
                 Section {
                     TextField(String(localized: "标签，用逗号隔开"), text: $tags)

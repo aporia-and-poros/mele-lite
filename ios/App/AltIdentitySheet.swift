@@ -116,7 +116,7 @@ struct AltIdentitySheet: View {
             SheetField(title: "小号叫什么", text: $name, placeholder: String(localized: "比如：小满"))
             VStack(alignment: .leading, spacing: 6) {
                 Text("这个你是什么样的人（可以不写）").font(Typo.sans(Typo.Size.callout)).foregroundStyle(theme.inkDim)
-                TextEditor(text: $about)
+                IMETextEditor(text: $about, size: Typo.Size.body)
                     .font(Typo.sans(Typo.Size.body))
                     .scrollContentBackground(.hidden)
                     .frame(height: 110)

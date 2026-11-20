@@ -37,6 +37,8 @@ import Testing
     @Test func deepSeekCannotSeeImages() {
         #expect(!ProviderConfig(kind: .openai, baseURL: "https://api.deepseek.com", model: "deepseek-chat").seesImages)
         #expect(ProviderConfig(kind: .openai, baseURL: nil, model: "gpt-5").seesImages)
+        #expect(!ProviderConfig(kind: .openai, baseURL: "https://api.siliconflow.cn/v1", model: "deepseek-ai/DeepSeek-V3.2").seesImages)
+        #expect(ProviderConfig(kind: .openai, baseURL: "https://api.siliconflow.cn/v1", model: "deepseek-ai/deepseek-vl2").seesImages)
         #expect(ProviderConfig(kind: .anthropic, model: "claude").seesImages)
         #expect(ProviderConfig(kind: .gemini, model: "gemini").seesImages)
     }

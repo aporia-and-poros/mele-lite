@@ -98,3 +98,6 @@ def test_relay_sees_images_unless_deepseek():
     assert not sees_images("openai-compatible", "https://api.deepseek.com/v1")
     assert sees_images("openai-compatible", None)   # 没填地址也当看得见
     assert sees_images("openai") and not sees_images("deepseek")
+    assert not sees_images("openai-compatible", "https://api.siliconflow.cn/v1", "deepseek-ai/DeepSeek-V3.2")   # 11-20
+    assert sees_images("openai-compatible", "https://api.siliconflow.cn/v1", "deepseek-ai/deepseek-vl2")
+    assert sees_images("openai-compatible", "https://api.siliconflow.cn/v1", "Qwen/Qwen3-VL-32B-Instruct")
