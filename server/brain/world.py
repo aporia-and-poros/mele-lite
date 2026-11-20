@@ -146,12 +146,13 @@ async def now_line(pool, comp: UUID, s: Settings, now: datetime, lang: str) -> s
     shown = "" if stale else doing
     if zh:
         return (f"〔现在〕你在「{name}」{'，' + shown if shown else ''}{'（' + clock + '）' if clock else ''}。"
-                "这只是背景：不用每句都提，刚说过的不再重复；时间长了事情自然往前走（吃完了、在路上了）。"
-                "要挪地方——你自己想去哪，或 TA 说你在别处而你接受了——就用 go_to，不然下一句你还在这儿。")
+                "这是今天安排的底稿，你在聊天里自己说过的更新算数：已经说了出门、在路上、到家、换了地方，就照你最后说的来，别改口回去，"
+                "顺手用 go_to 把这一行挪过去（TA 说你在别处而你接受了也一样）。不用每句都提，刚说过的不再重复；时间长了事情自然往前走（吃完了、在路上了）。")  # 11-20 内测：嘴上说在路上、没 go_to，下一轮改口
     return (f"[Right now] You're at \"{name}\"{', ' + shown if shown else ''}{' (' + clock + ')' if clock else ''}. "
-            "Background only: don't mention it every line, don't repeat what you just said; as time passes things "
-            "naturally move on (done eating, on the way). To change place — you want to go somewhere, or they say "
-            "you're elsewhere and you go with it — use go_to, or you'll still be here next line.")
+            "This is the outline of your day, and what you've said yourself in the chat counts more: if you already said "
+            "you left, are on the way, got home or moved somewhere, go by the last thing you said, don't take it back, and "
+            "use go_to to move this line (same if they say you're elsewhere and you go with it). Don't mention it every "
+            "line or repeat what you just said; as time passes things naturally move on (done eating, on the way).")
 
 
 # ── 写 ──

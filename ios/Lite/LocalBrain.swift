@@ -1302,6 +1302,17 @@ final class LocalBrain: @unchecked Sendable {
         let said = words.count > 200 ? String(words.prefix(200)) + "…" : words
         let f = DateFormatter(); f.dateFormat = "HH:mm"
         let span = LocalMap.elapsed(mins, zh: zh)
+        // 11-20 内测：隔了一晚它还顺着昨晚最后那句往下接。隔夜（换了一天且两小时以上）或六小时以上：说清上一句是哪天几点，话头放下
+        let prevAt = LocalStore.date(stored[lastAI]["at"])
+        let overnight = mins >= 360 || (mins >= 120 && !Calendar.current.isDate(prevAt, inSameDayAs: now))
+        if overnight {
+            let d = DateFormatter(); d.locale = Locale(identifier: zh ? "zh_CN" : "en_US")
+            d.dateFormat = Calendar.current.isDateInYesterday(prevAt) ? (zh ? "'昨天' HH:mm" : "'yesterday' HH:mm")
+                : Calendar.current.isDateInToday(prevAt) ? (zh ? "'今天' HH:mm" : "'today' HH:mm") : (zh ? "M月d日 HH:mm" : "d MMM HH:mm")
+            let then = d.string(from: prevAt)
+            return zh ? "〔\(pronoun)这一句隔了 \(span)才发来：上一句是\(then)，现在 \(f.string(from: now))。中间隔了一大段（多半睡过一觉），上次聊到的事已经过去了：别顺着上次最后那句往下接，也别当成刚才；那件事真要紧，就像隔天想起来那样提一句（「昨晚说的那个……」）。这一轮先接\(pronoun)现在这一句、现在这个时候。〕「\(said)」"
+                      : "[This came \(span) after the last message: that one was \(then), it's now \(f.string(from: now)). A long stretch has passed (probably a night's sleep), so what you talked about last time is over: don't carry on from the last line as if it were just now. If it still matters, bring it up the way you would the next day (\"about what you said last night…\"). Answer this message and this time of day first.] \"\(said)\""
+        }
         return zh ? "〔\(pronoun)这一句隔了 \(span)才发来，现在 \(f.string(from: now))；之前聊的是 \(span)前的事了〕「\(said)」——这一轮回的是这一句。"
                   : "[This came \(span) after the last message; it's now \(f.string(from: now)). What you talked about before was \(span) ago.] \"\(said)\" — this is what you're answering."
     }

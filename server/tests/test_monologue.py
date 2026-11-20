@@ -140,6 +140,11 @@ def test_gap_note_10_20():
     line = gap_note(D.timedelta(hours=2, minutes=3), now, "Asia/Singapore", "zh")
     assert "2 小时 3 分" in line and "15:58" in line
     assert "1 h" in gap_note(D.timedelta(hours=1), now, "Asia/Singapore", "en")
+    # 11-20 内测：隔了一晚还接昨晚的话头——隔夜换一段更重的话
+    night = gap_note(D.timedelta(hours=17), now, "Asia/Singapore", "zh")   # 现在 Singapore 15:58，上一句是前一天 22:58
+    assert "上一句是昨天 22:58" in night and "别顺着上次最后那句往下接" in night
+    assert "yesterday 22:58" in gap_note(D.timedelta(hours=17), now, "Asia/Singapore", "en")
+    assert "别顺着" not in line                                               # 同一天两小时：还是原来那句
 
 
 def test_untagged_list_reply_stays_in_body():

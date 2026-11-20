@@ -124,11 +124,27 @@ def gap_note(gap, now: datetime, tz: str, lang: str) -> str:
     if mins < GAP_MIN:
         return ""
     h, m = divmod(mins, 60)
-    clock = now.astimezone(ZoneInfo(tz)).strftime("%H:%M")
+    here = now.astimezone(ZoneInfo(tz))
+    clock = here.strftime("%H:%M")
+    # 11-20 内测：隔了一晚它还顺着昨晚最后那句往下接。隔夜（换了一天且两小时以上）或六小时以上：说清上一句是哪天几点，话头放下
+    prev = here - gap
+    overnight = mins >= 360 or (mins >= 120 and prev.date() != here.date())
+    days = (here.date() - prev.date()).days
     if lang == "zh":
         span = f"{h} 小时 {m} 分" if h and m else (f"{h} 小时" if h else f"{m} 分钟")
+        if overnight:
+            then = ("今天" if days == 0 else "昨天" if days == 1 else f"{prev.month}月{prev.day}日") + " " + prev.strftime("%H:%M")
+            return (f"〔这一句隔了 {span} 才发来：上一句是{then}，现在 {clock}。中间隔了一大段（多半睡过一觉），上次聊到的事已经过去了："
+                    "别顺着上次最后那句往下接，也别当成刚才；那件事真要紧，就像隔天想起来那样提一句（「昨晚说的那个……」）。"
+                    "这一轮先接现在这一句、现在这个时候。〕")
         return f"〔这一句是隔了 {span} 才发来的，现在 {clock}；之前聊的是 {span} 前的事了，这一轮接的是这一句〕"
     span = f"{h} h {m} min" if h and m else (f"{h} h" if h else f"{m} min")
+    if overnight:
+        then = ("today" if days == 0 else "yesterday" if days == 1 else prev.strftime("%-d %b")) + " " + prev.strftime("%H:%M")
+        return (f"[This message came {span} after the last one: that one was {then}, it's now {clock}. A long stretch has passed "
+                "(probably a night's sleep), so what you talked about last time is over: don't carry on from the last line as if it "
+                "were just now. If it still matters, bring it up the way you would the next day (\"about what you said last night…\"). "
+                "Answer this message and this time of day first.]")
     return f"[This message came {span} after the last one; it's now {clock}. What you talked about before was {span} ago — answer this one.]"
 
 

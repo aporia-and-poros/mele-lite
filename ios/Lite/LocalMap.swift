@@ -133,6 +133,7 @@ enum LocalMap {
         guard !name.isEmpty else { return "" }
         // 到这儿多久了 + 下一站（10-13 内测：一段「喝汤」排两小时，它没有钟，一上午每句都在喝汤；
         // 给它时间，事情自然往前走；要挪地方有 go_to）
+        // 11-20 内测：它嘴上说「在路上了」没调 go_to，下一轮这行还说「你在公司收尾」，它就改口「收尾卡住了」——聊天里自己说的优先
         let f = DateFormatter(); f.dateFormat = "HH:mm"
         let since = n["time"] as? String ?? ""
         let mins = minutes(f.string(from: Date())) - minutes(since)
@@ -145,8 +146,8 @@ enum LocalMap {
                  : "been here \(elapsed(mins, zh: false))" + (stale ? "; you came to \(doing), but that was \(elapsed(mins, zh: false)) ago" : "")
         let shown = stale ? "" : doing
         return zh
-            ? "〔现在〕你在「\(name)」\(shown.isEmpty ? "" : "，\(shown)")\(clock.isEmpty ? "" : "（\(clock)）")。这只是背景：不用每句都提，刚说过的不再重复；时间长了事情自然往前走（吃完了、在路上了）。要挪地方——你自己想去哪，或 TA 说你在别处而你接受了——就用 go_to，不然下一句你还在这儿。"
-            : "[Right now] You're at \"\(name)\"\(shown.isEmpty ? "" : ", \(shown)")\(clock.isEmpty ? "" : " (\(clock))"). Background only: don't mention it every line, don't repeat what you just said; as time passes things naturally move on (done eating, on the way). To change place — you want to go somewhere, or they say you're elsewhere and you go with it — use go_to, or you'll still be here next line."
+            ? "〔现在〕你在「\(name)」\(shown.isEmpty ? "" : "，\(shown)")\(clock.isEmpty ? "" : "（\(clock)）")。这是今天安排的底稿，你在聊天里自己说过的更新算数：已经说了出门、在路上、到家、换了地方，就照你最后说的来，别改口回去，顺手用 go_to 把这一行挪过去（TA 说你在别处而你接受了也一样）。不用每句都提，刚说过的不再重复；时间长了事情自然往前走（吃完了、在路上了）。"
+            : "[Right now] You're at \"\(name)\"\(shown.isEmpty ? "" : ", \(shown)")\(clock.isEmpty ? "" : " (\(clock))"). This is the outline of your day, and what you've said yourself in the chat counts more: if you already said you left, are on the way, got home or moved somewhere, go by the last thing you said, don't take it back, and use go_to to move this line (same if they say you're elsewhere and you go with it). Don't mention it every line or repeat what you just said; as time passes things naturally move on (done eating, on the way)."
     }
 
     static func minutes(_ hm: String) -> Int {
