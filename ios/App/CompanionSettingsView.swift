@@ -280,7 +280,8 @@ struct CompanionSettingsView: View {
     @State private var personalityOpen = false   // 性格 / 导入的卡太长默认收起（10-20 内测：设定太长，每次要划很久才到下面的开关）
     @State private var importedOpen = false
     @State private var customRel = ""
-    @State private var customLen = ""          // 记性长度自己填（11-20 内测：只有短中长三档）
+    @State private var customLen = ""
+    @State private var queueSend = false       // 攒着发（存在这台手机上，每个 TA 一份）          // 记性长度自己填（11-20 内测：只有短中长三档）
     @State private var writingOwn = false       // 出厂性格清空了、正在自己写
     @State private var wechatDraft = ""         // 微信号先在本地编辑，合法才存（10-11）
     @State private var wechatNote: String?
@@ -352,6 +353,7 @@ struct CompanionSettingsView: View {
         .environment(\.colorScheme, .light)
         .task {
             await store.load(); customRel = customRelationship
+            queueSend = UserDefaults.standard.bool(forKey: QueueSend.key(companion.id))
             if let v = store.settings["memory_length"] as? Int, !Self.lengthPresets.contains(v) { customLen = String(v) }
         }
         .sheet(item: $chatFile) { f in ActivityView(items: [f.url]) }
@@ -817,6 +819,10 @@ struct CompanionSettingsView: View {
             if Lite.local { note(linked ? "TA 每句话都会先去记忆库想一下，「联想」管想起多少。"
                                      : "接上记忆库，TA 每句话都会先去想一下；没接的话，Lite 记得的是最近的聊天和回声。") }
             Toggle(isOn: store.s("long_mode", false)) { row("长文模式", "回复整段发，不切成一条条") }
+            // 攒着发（11-26 内测：长按发送键攒句藏得太深）：只是这台手机上输入框的手感，不进设定、不经过 Host
+            Toggle(isOn: Binding(get: { queueSend }, set: { queueSend = $0; UserDefaults.standard.set($0, forKey: QueueSend.key(companion.id)) })) {
+                row("攒着发", "打开后按发送键是先排着，想说的都排好了，输入框空着再按一下一起发出去；长按发送键马上发")
+            }
         } header: { GlassHeader("记性") }
     }
 

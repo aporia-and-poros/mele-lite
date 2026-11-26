@@ -60,6 +60,7 @@ final class IncomingCalls: NSObject, ObservableObject {
     /// 「打电话」工具：App 开着就盖来电页响铃；在后台就连着弹来电通知
     func place(conversation: String, companion: String, reason: String) -> Placed {
         if busy || ringing != nil || answered != nil { return .busy }
+        if !AIConsent.granted { return .busy }     // 没同意把数据发给第三方 AI：通话要转写、合成，先不响
         let r = Ring(id: UUID().uuidString.lowercased(), conversation: conversation, companion: companion,
                      reason: reason, at: Date(), system: false)
         ringing = r
@@ -92,7 +93,7 @@ final class IncomingCalls: NSObject, ObservableObject {
 
     /// HostVoIP 收到推送、已经报给系统来电以后调；响铃期间每 3 秒问一次 Host 这通还在不在（撤回 / 未接由 Host 定）
     func incomingFromHost(callID: String, conversation: String, companion: String, reason: String) {
-        guard ringing?.id != callID else { return }
+        guard ringing?.id != callID, AIConsent.granted else { return }
         ringing = Ring(id: callID, conversation: conversation, companion: companion, reason: reason, at: Date(), system: true)
         poll?.cancel()
         poll = Task { [weak self] in
@@ -335,7 +336,11 @@ struct IncomingCallView: View {
         ZStack {
             Color(red: 0.11, green: 0.11, blue: 0.12)
             if let avatar {
-                Image(uiImage: avatar).resizable().scaledToFill().blur(radius: 60).opacity(0.55)
+                // 11-26 内测：头像是竖长的图时，scaledToFill 把整页撑得比屏幕高，下面拒绝 / 接听两个键被挤出屏幕，界面点不动。
+                // 跟 11-03 通话页同一个毛病：放进 Color.clear 的 overlay 里再裁掉，图再长也只占一屏
+                Color.clear
+                    .overlay { Image(uiImage: avatar).resizable().scaledToFill().blur(radius: 60).opacity(0.55) }
+                    .clipped()
             }
             Color.black.opacity(0.35)
             VStack(spacing: 0) {

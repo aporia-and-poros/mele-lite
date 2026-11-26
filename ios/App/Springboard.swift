@@ -208,16 +208,34 @@ struct HomeMetrics {
     static let label: CGFloat = 20
     static let top: CGFloat = 56
 
-    var cw: CGFloat { (width - Self.padX * 2 - Self.gapX * 3) / 4 }
-    var icon: CGFloat { min(64, cw - 4) }
-    var rh: CGFloat { min(icon + Self.label, (height - Self.top - Self.gapY * CGFloat(Self.maxRows - 1)) / CGFloat(Self.maxRows)) }
+    /// 6 行排满、每行图标 64 + 字要多高
+    static let natural: CGFloat = top + CGFloat(maxRows) * (64 + label) + gapY * CGFloat(maxRows - 1)
 
-    func frame(_ p: HomeGrid.Placed) -> CGRect {
+    /// 整页缩多少（11-24 苹果拿 iPad 审：iPhone 版在 iPad 窗口里更宽更矮，6 行塞不下，
+    /// 字被下一行图标压住、小组件挤扁）。高度不够就照 iPhone 的比例排好、整页等比缩小——
+    /// 像把一块 iPhone 屏缩小放进去，里面什么都不挤。iPhone 上高度够，是 1，跟以前一样
+    var scale: CGFloat { height > 0 ? min(1, height / Self.natural) : 1 }
+    /// 排版用的尺寸（缩之前）
+    private var lw: CGFloat { width / scale }
+    private var lh: CGFloat { height / scale }
+
+    var cw: CGFloat { (lw - Self.padX * 2 - Self.gapX * 3) / 4 }
+    var icon: CGFloat { min(64, cw - 4) }
+    var rh: CGFloat { min(icon + Self.label, (lh - Self.top - Self.gapY * CGFloat(Self.maxRows - 1)) / CGFloat(Self.maxRows)) }
+
+    /// 这一格在排版尺寸里的位置（画格子用：按这个大小画，再整体缩 scale）
+    func layoutFrame(_ p: HomeGrid.Placed) -> CGRect {
         let (w, h) = p.item.span
         let width = CGFloat(w) * cw + CGFloat(w - 1) * Self.gapX
         let height = CGFloat(h) * rh + CGFloat(h - 1) * Self.gapY - (p.item.widget != nil ? Self.label * 0.6 : 0)
         return CGRect(x: Self.padX + CGFloat(p.col) * (cw + Self.gapX), y: Self.top + CGFloat(p.row) * (rh + Self.gapY),
                       width: width, height: height)
+    }
+
+    /// 这一格在屏幕上的位置（手指点哪格用）
+    func frame(_ p: HomeGrid.Placed) -> CGRect {
+        let f = layoutFrame(p)
+        return CGRect(x: f.minX * scale, y: f.minY * scale, width: f.width * scale, height: f.height * scale)
     }
 }
 
@@ -258,6 +276,7 @@ struct Springboard: View {
     @State private var memoryAlert = false
     @State private var showMemory = false
     @AppStorage(MemoryLink.key) private var memoryConnected = false   // 接上 / 断开记忆库时图标跟着变
+    @AppStorage(CoachTour.homeKey) private var homeTourPending = false   // 主屏导览没看完前先不冒 Host 提示
     @State private var wakeFor: HomeView.WakeTarget?
     // 主屏导览（10-10 Aporia：新用户不知道设置在星星里）。旧首页那段 10-04 换成主屏后就没人放了
     @State private var coachFrames: [String: CGRect] = [:]
@@ -282,6 +301,9 @@ struct Springboard: View {
                          ? "只是从主屏拿掉，里面的东西都还在。编辑时左上角 ＋ →「加软件」可以找回来。"
                          : "只是拿掉这张小组件，之后可以从左上角 ＋ →「加小组件」再加回来。")
                 }
+            // Lite 引导走完：冒一次「看看 Mele Host」（10-04 Aporia：轻提示）。占自己的位置、不浮在格子上
+            // （11-24：以前是盖在主屏上的，格子排满时盖住最后一排）；它在的时候格子往上收
+            if Lite.on && !homeTourPending && !editing { HostTip().padding(.vertical, 6) }
             dots
             dock
         }
@@ -430,11 +452,13 @@ struct Springboard: View {
         let placed = HomeGrid.pack(items, rows: HomeMetrics.maxRows)
         return ZStack(alignment: .topLeading) {
             ForEach(Array(placed.enumerated()), id: \.element.item.id) { n, p in
-                let f = m.frame(p)
+                let f = m.layoutFrame(p)
                 cell(p.item, index: n, size: f.size, icon: m.icon)
                     .frame(width: f.width, height: f.height, alignment: .top)
+                    .scaleEffect(m.scale, anchor: .topLeading)     // iPad 窗口矮：整页等比缩（HomeMetrics.scale）
+                    .frame(width: f.width * m.scale, height: f.height * m.scale, alignment: .topLeading)   // 占的位置也跟着缩，不然整页被撑宽、往左偏
                     .opacity(drag?.item.id == p.item.id ? 0 : 1)
-                    .offset(x: f.minX, y: f.minY)
+                    .offset(x: f.minX * m.scale, y: f.minY * m.scale)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -502,14 +526,15 @@ struct Springboard: View {
     /// 拖着走时手指下面那一格（照原样画，大小跟格子一样）
     @ViewBuilder private func floating(_ item: HomeItem) -> some View {
         let m = metrics
-        let f = m.frame(HomeGrid.Placed(item: item, row: 0, col: 0))
+        let f = m.layoutFrame(HomeGrid.Placed(item: item, row: 0, col: 0))
         if let app = item.app {
-            AppIcon(app: app, size: m.icon, showLabel: false) {}
+            AppIcon(app: app, size: m.icon, showLabel: false) {}.scaleEffect(m.scale)
         } else if let slot = item.widget {
             WidgetCard(slot: slot, onOpenWakes: { _ in })
                 .frame(width: f.width, height: f.height)
                 .modifier(CardIf(on: !slot.kind.bare))
                 .background { if slot.kind == .pegboard { BoardSurface() } }
+                .scaleEffect(m.scale)
         }
     }
 
@@ -580,6 +605,7 @@ struct Springboard: View {
         guard let d = drag else { return }
         let p = current
         let m = metrics
+        let pt = CGPoint(x: pt.x / m.scale, y: pt.y / m.scale)   // 屏幕上的点换回排版尺寸（iPad 整页缩过）
         let (w, h) = d.item.span
         var col = Int(((pt.x - HomeMetrics.padX) / (m.cw + HomeMetrics.gapX)).rounded(.down))
         var row = Int(((pt.y - HomeMetrics.top) / (m.rh + HomeMetrics.gapY)).rounded(.down))

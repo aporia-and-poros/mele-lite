@@ -138,6 +138,10 @@ struct ChatView: View {
     /// 同意弹窗还开着时，攒着一起发的后面几句先排在这儿
     @State private var consentQueue: [String] = []
     @State private var calling = false          // 语音通话（10-31）
+    /// 还没同意把数据发给第三方 AI（AIConsent，11-24 苹果 5.1.2）：先弹说明，同意了再接着做这件事
+    @State private var aiGateThen: (() -> Void)?
+    @State private var aiGateDraft = ""
+    @State private var showAIGate = false
     @State private var showCallHistory = false  // 通话记录（10-31，第 5 步）
     #endif
 
@@ -437,6 +441,23 @@ struct ChatView: View {
                 .presentationDetents([.medium])
                 .interactiveDismissDisabled()
             }
+            .sheet(isPresented: $showAIGate) {
+                AIConsentSheet(onAgree: {
+                    AIConsent.grant()
+                    showAIGate = false
+                    let then = aiGateThen
+                    aiGateThen = nil
+                    aiGateDraft = ""
+                    // 等这张收下去再做（接着可能还要弹「发到哪里」那张）
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { then?() }
+                }, onDecline: {
+                    showAIGate = false
+                    aiGateThen = nil
+                    if !aiGateDraft.isEmpty { UserDefaults.standard.set(aiGateDraft, forKey: draftKey) }   // 没发的话放回输入框
+                    aiGateDraft = ""
+                })
+                .environmentObject(theme)
+            }
             #endif
             .sheet(item: $editingReply) { item in
                 EditReplySheet(original: item.text) { text in
@@ -710,7 +731,7 @@ struct ChatView: View {
             // 打电话（10-31）：Lite 本机先能打；连着 Host 的、正式版还占着位
             #if LITE
             if Lite.on && group == nil {         // 连着 Host 也能打（10-31 第 3 步；Host 要 update 到带电话的那版）
-                Button { calling = true } label: { Label("语音通话", systemImage: "phone.fill") }
+                Button { withAI { calling = true } } label: { Label("语音通话", systemImage: "phone.fill") }
                 Button { showCallHistory = true } label: { Label("通话记录", systemImage: "clock.arrow.circlepath") }
             } else {
                 Button {} label: { Label("打电话（以后做）", systemImage: "phone.fill") }.disabled(true)
@@ -1025,7 +1046,7 @@ struct ChatView: View {
                 // TA 打来没接通（10-31 第 4 步）：照微信一行灰字，点了回拨
                 Button {
                     #if LITE
-                    calling = true
+                    withAI { calling = true }
                     #endif
                 } label: {
                     HStack(spacing: 4) {
@@ -1619,7 +1640,7 @@ struct ChatView: View {
                     Button { stickerPanel = true } label: { Label("表情包", systemImage: "face.smiling") }
                     #if LITE
                     if Lite.on && group == nil && !isMoment {
-                        Button { calling = true } label: { Label("语音通话", systemImage: "phone") }   // 微信放在 + 里（10-31）
+                        Button { withAI { calling = true } } label: { Label("语音通话", systemImage: "phone") }   // 微信放在 + 里（10-31）
                     }
                     #endif
                 } label: {
@@ -1632,22 +1653,22 @@ struct ChatView: View {
                 }
                 // 草稿住在 DraftField 自己家里：她打的每一个字都会重画拥有它的那个视图。
                 // 输入框换行了要吱一声：底栏的高度是 UIKit 那边按实际宽度量的，自己感知不到 SwiftUI 里的换行
-                DraftField(draftKey: draftKey, placeholder: "对\(companionName)说点什么…", skin: skin,
+                DraftField(draftKey: draftKey, queueKey: QueueSend.key(companionID), placeholder: "对\(companionName)说点什么…", skin: skin,
                            hasStaged: !chat.staged.isEmpty, stagedBar: AnyView(stagedBar), held: $chat.held,
                            mentionNames: group == nil ? [] : (group?.members ?? []).compactMap { memberLook[$0]?.name },
                            onHeightChange: { _ in listHandle.barContentChanged() },
-                           onVoice: isMoment ? nil : { data, secs in Task { await chat.sendVoice(data, seconds: secs) } }) { typed in
+                           onVoice: isMoment ? nil : { data, secs in withAI { Task { await chat.sendVoice(data, seconds: secs) } } }) { typed in
                     var text = typed
                     if let quoted = quoting, !typed.isEmpty {
                         text = "「回复：\(quoteSnippet(quoted))」\n" + text
                         quoting = nil
                     }
                     #if LITE
-                    // 第一次发给这家模型：先说清楚发到哪、请 TA 点同意（苹果 5.1.2）
-                    if consentAsk != nil { consentQueue.append(text); return }
-                    if !text.isEmpty, let ask = LiteConsent.ask(companion: companionID, text: text) { consentAsk = ask; return }
-                    #endif
+                    if !AIConsent.granted { aiGateDraft = text }
+                    withAI { liteSend(text) }
+                    #else
                     deliver(text)
+                    #endif
                 }
             }
         }
@@ -1869,6 +1890,24 @@ struct ChatView: View {
             chat.errorText = (error as? APIError)?.message ?? "没念出来"
         }
     }
+
+    /// 要用到第三方 AI 的事（发消息、发语音、打电话）：还没同意（AIConsent）就先弹说明，同意了再做
+    private func withAI(_ then: @escaping () -> Void) {
+        #if LITE
+        if AIConsent.granted { then() } else { aiGateThen = then; showAIGate = true }
+        #else
+        then()
+        #endif
+    }
+
+    #if LITE
+    /// 第一次发给这家模型：先说清楚发到哪、请 TA 点同意（苹果 5.1.2）
+    private func liteSend(_ text: String) {
+        if consentAsk != nil { consentQueue.append(text); return }
+        if !text.isEmpty, let ask = LiteConsent.ask(companion: companionID, text: text) { consentAsk = ask; return }
+        deliver(text)
+    }
+    #endif
 
     /// 真正发出去：选好了图就是图配这句，否则就是这句
     private func deliver(_ text: String) {
@@ -2383,6 +2422,8 @@ private struct DraftField: View {
     @State private var voiceActive = false
     /// 攒着一起发（11-03 一测）：长按发送键，这句先排在输入框上面；再按一下发送，一起发
     @Binding private var held: [String]
+    /// TA 设定里的「攒着发」（11-26 内测：长按藏得太深，没人知道）：开着时按发送 = 排队，输入框空着再按 = 一起发；长按反过来，马上发
+    @AppStorage private var queueMode: Bool
     /// 选好了图：没打字也能发
     var hasStaged = false
     var stagedBar: AnyView?
@@ -2391,7 +2432,7 @@ private struct DraftField: View {
     /// 群里能 @ 的名字（10-11）：打了 @ 就在输入框上面浮一排
     var mentionNames: [String] = []
 
-    init(draftKey: String, placeholder: String, skin: ChatSkin, hasStaged: Bool = false, stagedBar: AnyView? = nil, held: Binding<[String]>, mentionNames: [String] = [], onHeightChange: @escaping (CGFloat) -> Void,
+    init(draftKey: String, queueKey: String = "", placeholder: String, skin: ChatSkin, hasStaged: Bool = false, stagedBar: AnyView? = nil, held: Binding<[String]>, mentionNames: [String] = [], onHeightChange: @escaping (CGFloat) -> Void,
          onVoice: ((Data, Double) -> Void)? = nil, onSend: @escaping (String) -> Void) {
         self.mentionNames = mentionNames
         self.hasStaged = hasStaged
@@ -2399,6 +2440,7 @@ private struct DraftField: View {
         _held = held
         self.onVoice = onVoice
         _draft = AppStorage(wrappedValue: "", draftKey)
+        _queueMode = AppStorage(wrappedValue: false, queueKey.isEmpty ? "queueSend-none" : queueKey)
         self.placeholder = placeholder
         self.skin = skin
         self.onHeightChange = onHeightChange
@@ -2414,6 +2456,16 @@ private struct DraftField: View {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         held.append(draft.trimmingCharacters(in: .whitespacesAndNewlines))
         draft = ""
+    }
+
+    /// 发送键（点一下）：攒着发开着时，打了字就排队，输入框空着才一起发
+    private func tapSend() {
+        if queueMode && typed { hold() } else { flush() }
+    }
+
+    /// 长按发送键：平时是「这句先攒着」；攒着发开着时反过来，连同排着的马上发
+    private func pressSend() {
+        if queueMode { flush() } else { hold() }
     }
 
     /// 攒着的 + 正在打的，按顺序发
@@ -2444,7 +2496,8 @@ private struct DraftField: View {
                     .padding(.horizontal, 12).padding(.vertical, 6)
                     .background(paintedChrome(Capsule(), skin: skin))
                 }
-                Text("按发送键一起发出去").font(Typo.sans(Typo.Size.caption)).foregroundStyle(skin.inkDim)
+                Text(queueMode ? "输入框空着时按发送键，一起发出去；长按发送键马上发" : "按发送键一起发出去")
+                    .font(Typo.sans(Typo.Size.caption)).foregroundStyle(skin.inkDim)
             }
         }
         // 群里打了 @：输入框上面一排成员（10-11）。放在排版里而不是浮层——浮出底栏的部分点不到
@@ -2474,7 +2527,8 @@ private struct DraftField: View {
             .submitLabel(.send)
             .onSubmit {
                 guard sendable else { return }
-                if !held.isEmpty { hold() } else { flush() }   // 正在攒：回车接着攒，发送键才发
+                if queueMode { tapSend() }                     // 攒着发：回车跟发送键一样
+                else if !held.isEmpty { hold() } else { flush() }   // 正在攒：回车接着攒，发送键才发
                 focused = true          // 发完键盘不缩回去，接着聊
             }
             .onReceive(NotificationCenter.default.publisher(for: ChatView.selfTestFocus)) { note in
@@ -2505,21 +2559,26 @@ private struct DraftField: View {
         if let onVoice, !sendable {
             VoiceRecordButton(skin: skin, active: $voiceActive, onSend: onVoice)
         } else {
-        Image(systemName: "arrow.up")
+        Image(systemName: queueMode && typed ? "text.append" : "arrow.up")     // 攒着发：打了字时是「排上」，空着时才是「发」
             .font(Typo.icon(16, .bold))
             .foregroundStyle(theme.accent)
             .frame(width: 36, height: 36)
             .background(paintedChrome(Circle(), skin: skin))
             .contentShape(Circle())
-            .gesture(LongPressGesture(minimumDuration: 0.4).onEnded { _ in hold() }
-                .exclusively(before: TapGesture().onEnded { flush() }))
+            .gesture(LongPressGesture(minimumDuration: 0.4).onEnded { _ in pressSend() }
+                .exclusively(before: TapGesture().onEnded { tapSend() }))
             .accessibilityAddTraits(.isButton)
-            .accessibilityLabel(Text("发送"))
-            .accessibilityAction { flush() }
+            .accessibilityLabel(Text(queueMode && typed ? "排上这句" : "发送"))
+            .accessibilityAction { tapSend() }
             .allowsHitTesting(sendable)
             .opacity(sendable ? 1 : 0.5)
         }
     }
+}
+
+/// 攒着发开关存在哪（每个 TA 一份，只在这台手机上）
+enum QueueSend {
+    static func key(_ companion: UUID) -> String { "queueSend-\(companion.uuidString.lowercased())" }
 }
 
 /// 改 TA 说过的一泡（11-07）

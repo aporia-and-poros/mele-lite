@@ -30,6 +30,7 @@ struct MeView: View {
                 #if LITE
                 if Lite.local, KeepReplying.supported { KeepReplyingCard() }   // 切走以后接着回（11-13）
                 BackupCard()          // 一键备份 / 从备份恢复（10-10 内测前）
+                PrivacyCard()         // 第三方 AI 的同意：看说明、收回（11-24 苹果 5.1.2）
                 #endif
                 if Lite.on { AboutCard() }
             }

@@ -22,6 +22,9 @@ struct MainTabView: View {
     @State private var feedbackShown = false   // 内测反馈小卡片（11-03）
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(CoachTour.homeKey) private var homeTourPending = false   // 主屏导览没看完前先不冒 Host 提示（两个挤一个位置）
+    /// 第三方 AI 的总说明（AIConsent，11-24 苹果 5.1.1 / 5.1.2）：进主屏先问一次
+    @AppStorage("aiConsent.general.v1") private var aiConsent = false
+    @State private var askAIConsent = false
 
     static let slide = Animation.snappy(duration: 0.32)
 
@@ -46,9 +49,7 @@ struct MainTabView: View {
                 Springboard()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .overlay(alignment: .bottom) {             // Lite 引导走完：冒一次「看看 Mele Host」（10-04 Aporia：轻提示）
-                if Lite.on && !coveredByList && !homeTourPending { HostTip().padding(.bottom, 118) }
-            }
+            // 「看看 Mele Host」那条提示搬进了 Springboard（11-24：浮着会盖住最后一排图标，iPad 上审核看到了）
             // 标签页永远是亮色：聊天页深色时整窗会翻黑，推开那一下底下不能跟着暗（之前自用的 App 08-06）
             .environment(\.colorScheme, .light)
             .ignoresSafeArea(.keyboard, edges: .bottom)
@@ -105,7 +106,18 @@ struct MainTabView: View {
             }
             else if phase == .background { ContextReporter.shared.background() }
         }
+        .sheet(isPresented: $askAIConsent) {
+            #if LITE
+            AIConsentSheet(onAgree: { AIConsent.grant(); askAIConsent = false },
+                           onDecline: { askAIConsent = false })
+                .environmentObject(theme)
+            #endif
+        }
         .task {
+            #if LITE
+            // 没同意过总说明：之前按家点过的「发到哪里」也不算数（后台的日记、留信、主动找你都看它），先问总的
+            if !aiConsent { LiteConsent.book.revokeAll(); askAIConsent = true }
+            #endif
             ContextReporter.shared.api = model.api
             MusicStore.shared.api = model.api
             await MusicStore.shared.load()               // 歌卡要知道 TA 用什么听歌
@@ -122,6 +134,13 @@ struct MainTabView: View {
             #if DEBUG && LITE
             // 自测（10-31）：-callSelfTest 直接进第一个 TA 的聊天，聊天页接着打电话
             if CommandLine.arguments.contains("-callSelfTest"), let c = model.companions.first { await model.openChat(c) }
+            // 自测（11-26）：-ringScreenTest 不经过模型，直接盖来电页（看拒绝 / 接听两个键在不在屏幕里）
+            if CommandLine.arguments.contains("-ringScreenTest"), let c = model.companions.first {
+                try? await Task.sleep(for: .seconds(1))
+                let cid = c.id.uuidString.lowercased()
+                let conv = LocalHost.shared.store.conversations.first { ($0["companion_id"] as? String) == cid }?["id"] as? String ?? ""
+                _ = IncomingCalls.shared.place(conversation: conv, companion: cid, reason: "测试来电")
+            }
             // 自测（10-31 第 4 步）：-ringSelfTest 进第一个 TA 的聊天，递一句旁白让它用 phone_call 打过来
             if CommandLine.arguments.contains("-ringSelfTest"), let c = model.companions.first {
                 await model.openChat(c)

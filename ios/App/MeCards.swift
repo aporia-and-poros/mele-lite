@@ -1,5 +1,6 @@
 import PhotosUI
 import SwiftUI
+import WeatherKit
 import UIKit
 
 // MARK: - 「Me」的几张卡（第二块第 11 步）：我的设定、钥匙串、账号。外观在 MeView.swift。
@@ -636,6 +637,7 @@ struct ContextCard: View {
                     }
                 }
                 .tint(theme.accentDeep)
+                if kind == .weather { WeatherAttributionRow().padding(.leading, 4) }   // 苹果 5.2.5（11-24）：用了 WeatherKit 要标  Weather + 数据来源
                 if kind == .place && reporter.enabled.contains(.place) {
                     HStack {
                         Text(reporter.homeSet ? String(localized: "家已经设好了") : String(localized: "还没设家，先设了才会报"))
@@ -876,5 +878,33 @@ struct MediaKeySheet: View {
         } catch {
             result = (false, String(localized: "没存上，过会儿再试"))
         }
+    }
+}
+
+/// 天气数据来自 Apple 天气：标志 + 法律来源链接（WeatherKit 的署名要求，苹果审核 5.2.5）
+struct WeatherAttributionRow: View {
+    @EnvironmentObject private var theme: AppTheme
+    @State private var attribution: WeatherAttribution?
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("天气数据由").font(Typo.sans(Typo.Size.caption)).foregroundStyle(theme.inkFaint)
+            if let a = attribution {
+                AsyncImage(url: a.combinedMarkLightURL) { img in
+                    img.resizable().scaledToFit()
+                } placeholder: {
+                    Text("\u{F8FF} Weather").font(Typo.sans(Typo.Size.caption, .semibold)).foregroundStyle(theme.inkDim)
+                }
+                .frame(height: 12)
+                .accessibilityLabel("Apple Weather")
+                Link("数据来源", destination: a.legalPageURL)
+                    .font(Typo.sans(Typo.Size.caption, .medium)).foregroundStyle(theme.accentDeep)
+            } else {
+                Text("\u{F8FF} Weather").font(Typo.sans(Typo.Size.caption, .semibold)).foregroundStyle(theme.inkDim)
+                Link("数据来源", destination: URL(string: "https://developer.apple.com/weatherkit/data-source-attribution/")!)
+                    .font(Typo.sans(Typo.Size.caption, .medium)).foregroundStyle(theme.accentDeep)
+            }
+        }
+        .task { attribution = try? await WeatherService.shared.attribution }
     }
 }
