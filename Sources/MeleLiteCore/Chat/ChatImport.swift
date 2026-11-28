@@ -72,6 +72,7 @@ public enum ChatImport {
 
     public static func parse(_ data: Data, timeZone: TimeZone = .current) throws -> (source: ChatSource, conversations: [ImportedConversation]) {
         if let db = kelivoDatabase(in: data) { return (.kelivo, try kelivo(sqlite: db)) }
+        if let own = meleExport(data, timeZone: timeZone) { return (.markdown, own) }        // Mele 自己导出的 md（11-28）
         if let md = markdownChat(data, timeZone: timeZone) { return (.markdown, [md]) }      // md 聊天记录（10-11）
         if let takeout = try gemini(zip: data, timeZone: timeZone) { return (.gemini, takeout) }
         // 包里的文件叫 conversations.json，或者带编号 conversations-000.json

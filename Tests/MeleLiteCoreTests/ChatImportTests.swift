@@ -270,4 +270,80 @@ import Testing
         #expect(cal.dateComponents([.day, .hour, .minute], from: c.messages[2].at) == DateComponents(day: 12, hour: 9, minute: 5))
         #expect(throws: ChatImportError.self) { try ChatImport.parse(Data("# 随便写的笔记\n\n没有消息头".utf8)) }
     }
+
+    /// Mele 自己「导出聊天记录」写出来的 md 要能原样导回来（11-28 内测反馈）。
+    /// 样本照 App 里 ChatExport.render 的写法逐行拼的：改那边的格式要回来改这里。
+    @Test func meleOwnExportRoundTrips() throws {
+        let md = [
+            "# 和阿橘的聊天记录",
+            "",
+            "导出于 Nov 28, 2026 at 4:50 PM · 2 个窗口 · 6 条",
+            "",
+            "",
+            "## 第一次聊天（试试）",
+            "",
+            "### 2026-10-17 周六",
+            "",
+            "**小满** 18:49",
+            "晚上好！",
+            "",
+            "吃了没？",
+            "",
+            "**阿橘** 18:49",
+            "吃了。",
+            "",
+            "## 今天的菜单",
+            "",
+            "番茄炒蛋",
+            "",
+            "> 心声：她又来问我吃没吃",
+            "> 其实是她自己饿了",
+            "",
+            "### 2026-10-18 周日",
+            "",
+            "— 新的一天 —",
+            "",
+            "**小满** 09:05",
+            "早",
+            "",
+            "［图片］",
+            "",
+            "**阿栗** 09:06",
+            "我也在",
+            "",
+            "",
+            "## 悄悄话（小号：阿满 · 无痕）",
+            "",
+            "### 2026-10-19 Mon",
+            "",
+            "**阿满** 23:10",
+            "睡了吗",
+            "",
+            "**阿橘** 23:11",
+            "没有，在等你。",
+            "",
+        ].joined(separator: "\n")
+        let tz = TimeZone(identifier: "Asia/Singapore")!
+        let got = try ChatImport.parse(Data(md.utf8), timeZone: tz)
+        #expect(got.source == .markdown && got.conversations.count == 2)
+        let a = got.conversations[0], b = got.conversations[1]
+        #expect(a.title == "第一次聊天（试试）" && a.assistant == "阿橘")        // 标题自己带的括号不动
+        #expect(b.title == "悄悄话" && b.assistant == "阿橘")                    // 小号 / 无痕是标签，摘掉
+        #expect(a.messages.map(\.role) == [.user, .assistant, .user, .assistant])   // 群里别的 TA（阿栗）算对面
+        #expect(a.messages[0].text == "晚上好！\n\n吃了没？")                    // 一条里的两个气泡
+        #expect(a.messages[1].text == "吃了。\n\n## 今天的菜单\n\n番茄炒蛋")      // 正文里的小标题不是新窗口；心声不搬
+        #expect(a.messages[2].text == "早\n\n［图片］")                          // 分隔线不进正文
+        #expect(b.messages.map(\.role) == [.user, .assistant])                   // 这个窗口里小号才是「你」
+        #expect(b.messages.map(\.text) == ["睡了吗", "没有，在等你。"])
+        var cal = Calendar(identifier: .gregorian); cal.timeZone = tz
+        #expect(cal.dateComponents([.month, .day, .hour, .minute], from: a.messages[0].at) == DateComponents(month: 10, day: 17, hour: 18, minute: 49))
+        #expect(a.messages[1].at > a.messages[0].at)                             // 同一分钟也分得出先后
+        #expect(cal.dateComponents([.day, .hour, .minute], from: a.messages[2].at) == DateComponents(day: 18, hour: 9, minute: 5))
+        #expect(cal.dateComponents([.day, .hour, .minute], from: b.messages[1].at) == DateComponents(day: 19, hour: 23, minute: 11))
+        #expect(a.id != b.id)
+
+        // 一句都没聊过的导出：没有可搬的，照旧报认不出
+        let empty = "# 和阿橘的聊天记录\n\n导出于 Nov 28, 2026 · 0 个窗口 · 0 条\n\n（还没有聊过）\n"
+        #expect(throws: ChatImportError.self) { try ChatImport.parse(Data(empty.utf8)) }
+    }
 }
